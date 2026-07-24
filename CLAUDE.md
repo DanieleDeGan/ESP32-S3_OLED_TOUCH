@@ -40,19 +40,32 @@ non per scelta di design.
 
 ## Build / verifica
 
-Questo è un progetto **Arduino IDE**, non c'è un build system a riga di comando
-configurato nel repo (niente PlatformIO, niente CMake). `arduino-cli` non risulta
-installato su questa macchina, ma Arduino IDE con **ESP32 core 3.3.10** e libreria
-**lvgl 8.3.11** sono presenti (`Documents/Arduino/libraries/lvgl`), quindi la versione
-installata combacia con quella richiesta da `lv_conf.h`/`build_opt.h` (LVGL 8.3.x).
+Progetto **Arduino** (niente PlatformIO/CMake). `arduino-cli` è installato in
+`C:\Program Files\Arduino CLI\arduino-cli.exe` (non ancora nel PATH di default:
+usare il percorso completo, o `arduino-cli` diretto se una nuova sessione shell ha
+già raccolto il PATH aggiornato da winget). Usa la stessa cartella dati di Arduino
+IDE (`Arduino15`), quindi vede già **ESP32 core 3.3.10** e libreria **lvgl 8.3.11**
+(via Library Manager) — versione compatibile con quanto richiesto da
+`lv_conf.h`/`build_opt.h` (LVGL 8.3.x).
 
-Per compilare/caricare (via IDE, Tools menu):
+Compilazione di verifica da riga di comando (FQBN con le stesse opzioni del
+Tools menu di Arduino IDE):
+
+```
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi" WSOLED
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi" examples/Orientation_IMU
+```
+
+Equivalente via Arduino IDE (Tools menu):
 - Board: **ESP32S3 Dev Module**
 - Flash Size: **16MB**
 - Partition Scheme: **16M Flash (3MB APP/9.9MB FATFS)**
 - PSRAM: **OPI PSRAM**
 - USB CDC On Boot: **Enabled**
 - CPU Frequency: **240 MHz**
+
+Per caricare su scheda reale (non solo verificare) serve `--upload -p <porta_seriale>`,
+non testato da qui in quanto richiede la scheda collegata.
 
 Unica dipendenza esterna: libreria **LVGL 8.3.x** (via Library Manager). Il driver
 pannello e il driver touch sono già nella cartella del progetto, non sono librerie
@@ -125,7 +138,7 @@ dentro una callback LVGL (lock già preso, o task non ancora avviato).
   (addr `0x6B`, fallback `0x6A`): SDA=GPIO40, SCL=GPIO39. `Touch_Init()` (chiamato da
   `lvgl_port_init()`) installa il driver I2C: qualunque altro modulo su questo bus
   (vedi `imu_qmi8658.c`) deve riusarlo, **non** reinstallarlo.
-- **GPIO liberi** per periferiche custom: 2, 3, 4, 10–16, 21. Evitare 26 e 33–37
+- **GPIO liberi** per periferiche custom: 2, 3, 4, 10–16, 21, 38. Evitare 26 e 33–37
   (riservati alla PSRAM octal).
 
 ## Dove scrivere la logica applicativa

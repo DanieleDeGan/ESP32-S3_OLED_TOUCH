@@ -76,7 +76,7 @@ Contiene due define passati globalmente al compilatore:
   Non è un bus indipendente: segui il demo `SD_Test` di Waveshare. Schede ≤ 64 GB, FAT32.
 - **I2C**: touch e IMU QMI8658 sono sullo stesso bus (SDA=GPIO40, SCL=GPIO39;
   indirizzi 0x38 e 0x6B). Riusa quel bus, non aprirne un altro sugli stessi pin.
-- **GPIO liberi** per periferiche tue: 2, 3, 4, 10–16, 21. Evita 26 e 33–37 (PSRAM octal).
+- **GPIO liberi** per periferiche tue: 2, 3, 4, 10–16, 21, 38. Evita 26 e 33–37 (PSRAM octal).
 
 ## Esempio incluso: examples/Orientation_IMU
 
