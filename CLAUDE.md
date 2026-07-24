@@ -12,7 +12,9 @@ senso classico: `WSOLED/` va **copiato** in una nuova cartella per ogni progetto
 (vedi "Avviare un nuovo progetto" più sotto). `examples/Orientation_IMU/` è una demo
 autosufficiente, indipendente dal template.
 
-Non è (ancora) un repository git.
+Per il dettaglio file-per-file (scopo, funzioni chiave, dipendenze, cosa non
+toccare) vedi `FILES.md`. Per il pinout/hardware della board vedi
+`ESP32-S3-AMOLED-1.91-Guide.md`.
 
 ## Struttura
 
