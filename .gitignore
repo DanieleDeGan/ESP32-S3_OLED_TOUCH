@@ -1,0 +1,16 @@
+# Arduino IDE / build
+build/
+*.bin
+*.elf
+*.map
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor
+.vscode/
+
+# Claude Code (impostazioni locali, non condivise)
+.claude/settings.local.json
