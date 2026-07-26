@@ -1,8 +1,9 @@
 /**
  * WSOLED.ino  —  starter LVGL + SquareLine Studio (sketch vuoto)
  *
- * Tutto il boilerplate display/touch/LVGL e' in lvgl_port.cpp/.h.
- * Qui resta SOLO la tua logica: UI, WiFi, SD, sensori.
+ * Tutto il boilerplate display/touch/LVGL e' nelle librerie condivise
+ * WSOLED_Display/WSOLED_Touch (cartella libraries/ del repo). Qui resta SOLO
+ * la tua logica: UI, WiFi, SD, sensori.
  *
  * Per un esempio funzionante vedi examples/Orientation_IMU.
  *
@@ -17,7 +18,8 @@
  *   PSRAM=OPI PSRAM | USB CDC On Boot=Enabled
  */
 
-#include "lvgl_port.h"
+#include <WSOLED_Display.h>
+#include <WSOLED_Touch.h>
 #include "ui.h"
 
 // #include <WiFi.h>
@@ -35,8 +37,12 @@ void setup()
 {
     Serial.begin(115200);
 
-    // 1) Display + touch + LVGL + task di rendering
-    lvgl_port_init();
+    // 1) Display + LVGL + task di rendering
+    Display_Init();
+
+    // 1b) Touch (opzionale: ometti queste due righe per un progetto senza touch)
+    Touch_Init();
+    Touch_RegisterLvglIndev();
 
     // 2) UI generata da SquareLine: si creano oggetti LVGL -> serve il lock
     if (lvgl_lock(-1)) {

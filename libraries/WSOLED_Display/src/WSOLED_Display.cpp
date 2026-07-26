@@ -1,12 +1,13 @@
 /**
- * lvgl_port.cpp
+ * WSOLED_Display.cpp
  *
- * Tutto il boilerplate di basso livello: SPI/QSPI, pannello SH8601, touch,
- * LVGL, tick timer, mutex e task di rendering. Lo sketch non deve toccare
- * nulla qui dentro: usa solo le funzioni dichiarate in lvgl_port.h.
+ * Boilerplate di basso livello: SPI/QSPI, pannello SH8601, LVGL, tick timer,
+ * mutex e task di rendering. Lo sketch non deve toccare nulla qui dentro: usa
+ * solo le funzioni dichiarate in WSOLED_Display.h. Nessuna dipendenza dal
+ * touch (WSOLED_Touch si registra da solo come LVGL indev, vedi il suo header).
  */
 
-#include "lvgl_port.h"
+#include "WSOLED_Display.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,7 +23,6 @@
 
 #include "lvgl.h"
 #include "esp_lcd_sh8601.h"
-#include "touch_bsp.h"
 
 // ---------------------------------------------------------------------------
 // Pin display (QSPI) e risoluzione
@@ -65,7 +65,6 @@ static SemaphoreHandle_t        lvgl_mux    = NULL;
 static esp_lcd_panel_io_handle_t s_io_handle = NULL;   // per inviare comandi a runtime
 static lv_disp_draw_buf_t       disp_buf;
 static lv_disp_drv_t            disp_drv;
-static lv_indev_drv_t           indev_drv;
 
 // ---------------------------------------------------------------------------
 // Sequenza init SH8601
@@ -96,18 +95,6 @@ static bool flush_ready_cb(esp_lcd_panel_io_handle_t io,
 {
     lv_disp_flush_ready((lv_disp_drv_t *)ctx);
     return false;
-}
-
-static void lvgl_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
-{
-    uint16_t x, y;
-    if (getTouch(&x, &y)) {
-        data->point.x = x;
-        data->point.y = y;
-        data->state   = LV_INDEV_STATE_PRESSED;
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
-    }
 }
 
 static void lvgl_tick_cb(void *arg)
@@ -173,7 +160,7 @@ static void lvgl_task(void *arg)
 // ---------------------------------------------------------------------------
 // Init pubblica
 // ---------------------------------------------------------------------------
-void lvgl_port_init(void)
+void Display_Init(void)
 {
     // --- Bus QSPI ---
     const spi_bus_config_t buscfg = SH8601_PANEL_BUS_QSPI_CONFIG(
@@ -207,8 +194,7 @@ void lvgl_port_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    // --- Touch + LVGL ---
-    Touch_Init();
+    // --- LVGL ---
     lv_init();
 
     // --- Buffer di disegno (DMA, doppio buffer) ---
@@ -226,7 +212,7 @@ void lvgl_port_init(void)
     disp_drv.flush_cb  = lvgl_flush_cb;
     disp_drv.draw_buf  = &disp_buf;
     disp_drv.user_data = panel_handle;
-    lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
+    lv_disp_drv_register(&disp_drv);
 
     // --- Tick LVGL via esp_timer ---
     const esp_timer_create_args_t tick_args = {
@@ -237,14 +223,11 @@ void lvgl_port_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&tick_args, &tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, LVGL_TICK_PERIOD_MS * 1000));
 
-    // --- Touch input device ---
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type    = LV_INDEV_TYPE_POINTER;
-    indev_drv.disp    = disp;
-    indev_drv.read_cb = lvgl_touch_cb;
-    lv_indev_drv_register(&indev_drv);
-
     // --- Mutex + task di rendering ---
+    // Nota: da qui in poi lvgl_task puo' girare (anche sull'altro core) e
+    // chiamare lv_timer_handler(), che scorre le liste interne di LVGL. Chi
+    // registra un indev DOPO questo punto (es. Touch_RegisterLvglIndev())
+    // deve avvolgere lv_indev_drv_register() in lvgl_lock()/lvgl_unlock().
     lvgl_mux = xSemaphoreCreateMutex();
     assert(lvgl_mux);
     xTaskCreate(lvgl_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);

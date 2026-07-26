@@ -1,16 +1,16 @@
 /**
- * imu_qmi8658.h
+ * WSOLED_IMU.h
  *
  * Mini-driver per l'IMU QMI8658 onboard (6 assi) della Waveshare
  * ESP32-S3-AMOLED-1.91. L'IMU e' sullo STESSO bus I2C del touch
- * (I2C_NUM_0, SDA=GPIO40, SCL=GPIO39): questo modulo NON installa il driver
- * I2C, riusa quello gia' avviato da Touch_Init() dentro lvgl_port_init().
- *
- * Ordine in setup(): prima lvgl_port_init() (che chiama Touch_Init), poi imu_init().
+ * (I2C_NUM_0, SDA=GPIO40, SCL=GPIO39): imu_init() porta su il bus tramite
+ * Core_I2CBusInit() (WSOLED_Core), idempotente — funziona indipendentemente
+ * dal fatto che WSOLED_Touch sia stato inizializzato prima, dopo, o per
+ * niente.
  */
 
-#ifndef IMU_QMI8658_H
-#define IMU_QMI8658_H
+#ifndef WSOLED_IMU_H
+#define WSOLED_IMU_H
 
 #include <stdbool.h>
 
@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 /* Inizializza l'accelerometro. Ritorna false se il chip non risponde
- * (WHO_AM_I != 0x05): in tal caso prova l'indirizzo alternativo (vedi .c). */
+ * (WHO_AM_I != 0x05): in tal caso prova l'indirizzo alternativo (vedi .cpp). */
 bool imu_init(void);
 
 /* Legge l'accelerazione nei 3 assi, in unita' di g (1 g = 9.81 m/s^2).
@@ -30,4 +30,4 @@ bool imu_read_accel(float *ax, float *ay, float *az);
 }
 #endif
 
-#endif // IMU_QMI8658_H
+#endif // WSOLED_IMU_H

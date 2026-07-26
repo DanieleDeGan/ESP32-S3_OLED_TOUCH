@@ -1,13 +1,17 @@
 /**
- * lvgl_port.h
+ * WSOLED_Display.h
  *
- * Modulo di porting LVGL per Waveshare ESP32-S3-AMOLED-1.91 (Touch).
- * Incapsula display SH8601 (QSPI), touch FT3168, LVGL e il task di rendering.
- * Lo sketch deve solo chiamare lvgl_port_init() e usare lvgl_lock/unlock.
+ * Modulo di porting LVGL per Waveshare ESP32-S3-AMOLED-1.91 (pannello SH8601,
+ * QSPI). Incapsula bus QSPI, pannello, LVGL e il task di rendering. Non ha
+ * alcuna dipendenza dal touch: per l'input aggiungi WSOLED_Touch e chiama
+ * Touch_Init()/Touch_RegisterLvglIndev() DOPO Display_Init() (serve che
+ * lv_init() sia gia' stato chiamato).
+ *
+ * Lo sketch deve solo chiamare Display_Init() e usare lvgl_lock()/lvgl_unlock().
  */
 
-#ifndef LVGL_PORT_H
-#define LVGL_PORT_H
+#ifndef WSOLED_DISPLAY_H
+#define WSOLED_DISPLAY_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,11 +22,11 @@ extern "C" {
 #endif
 
 /**
- * Inizializza SPI/QSPI, pannello SH8601, touch, LVGL (buffer, driver, tick)
- * e avvia il task FreeRTOS che chiama lv_timer_handler().
- * Da chiamare UNA sola volta in setup().
+ * Inizializza SPI/QSPI, pannello SH8601, LVGL (buffer, driver, tick) e avvia
+ * il task FreeRTOS che chiama lv_timer_handler(). Da chiamare UNA sola volta
+ * in setup(), prima di Touch_Init()/Touch_RegisterLvglIndev() se presenti.
  */
-void lvgl_port_init(void);
+void Display_Init(void);
 
 /**
  * Prende il lock LVGL. OBBLIGATORIO prima di leggere/modificare qualunque
@@ -65,4 +69,4 @@ bool lcd_read_register(uint8_t cmd, uint8_t *data, size_t len);
 }
 #endif
 
-#endif // LVGL_PORT_H
+#endif // WSOLED_DISPLAY_H

@@ -16,8 +16,9 @@
 
 #include <math.h>
 #include "lvgl.h"
-#include "lvgl_port.h"
-#include "imu_qmi8658.h"
+#include <WSOLED_Display.h>
+#include <WSOLED_Touch.h>
+#include <WSOLED_IMU.h>
 
 // --- Dimensioni del camper (mm): Adria Matrix Axess 680 SP (Fiat Ducato Maxi) ---
 #define TRACK_MM       1800.0f    // carreggiata Ducato (distanza ruote sx-dx)
@@ -219,7 +220,9 @@ void setup()
 {
     Serial.begin(115200);
 
-    lvgl_port_init();
+    Display_Init();
+    Touch_Init();
+    Touch_RegisterLvglIndev();
 
     if (lvgl_lock(-1)) {
         leveling_ui_create();

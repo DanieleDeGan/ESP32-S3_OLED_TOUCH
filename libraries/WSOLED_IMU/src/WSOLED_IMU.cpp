@@ -1,18 +1,19 @@
 /**
- * imu_qmi8658.c
+ * WSOLED_IMU.cpp
  *
- * Lettura accelerometro QMI8658 su I2C_NUM_0 (bus condiviso col touch).
- * Configurazione minima: accelerometro a fondo scala +/-2 g (massima
- * risoluzione per il calcolo dell'inclinazione).
+ * Lettura accelerometro QMI8658 su I2C (bus condiviso col touch, portato su
+ * da Core_I2CBusInit()). Configurazione minima: accelerometro a fondo scala
+ * +/-2 g (massima risoluzione per il calcolo dell'inclinazione).
  */
 
-#include "imu_qmi8658.h"
+#include "WSOLED_IMU.h"
+#include "WSOLED_Core.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2c.h"
 
-#define QMI_I2C_PORT   I2C_NUM_0   // stesso port usato da touch_bsp.c
+#define QMI_I2C_PORT   ((i2c_port_t)WSOLED_CORE_I2C_PORT)
 #define QMI_ADDR       0x6B        // se WHO_AM_I fallisce, prova 0x6A
 #define QMI_TIMEOUT    pdMS_TO_TICKS(100)
 
@@ -41,6 +42,8 @@ static bool imu_write(uint8_t reg, uint8_t val)
 
 bool imu_init(void)
 {
+    Core_I2CBusInit();
+
     uint8_t id = 0;
     if (!imu_read(QMI_WHO_AM_I, &id, 1) || id != 0x05) {
         return false;   // chip non trovato (controlla indirizzo / bus I2C attivo)
