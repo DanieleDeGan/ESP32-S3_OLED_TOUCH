@@ -24,9 +24,10 @@ progetto, non codice — vedi le rispettive sezioni sotto `WSOLED/`.
 | `WSOLED_SD` | `DHT11_SD_Logger` |
 | `WSOLED_Link` | `Link_Hub_Demo`, `Link_Node_Demo` |
 
-Gli sketch `examples/Diag_Hub/` e `examples/Diag_Node/` non usano nessuna
-libreria di questo repo: sono diagnostica ESP-NOW su `esp_now.h` grezzo (vedi
-le loro sezioni).
+Non usano nessuna di queste librerie: `examples/Diag_Hub/` e
+`examples/Diag_Node/` (diagnostica ESP-NOW su `esp_now.h` grezzo) e il template
+**`WSOLED_C3/`**, che è per un'altra scheda — le `libraries/` sono boilerplate
+della board AMOLED, non del repo in generale. Vedi le rispettive sezioni.
 
 ---
 
@@ -404,7 +405,7 @@ seguono le convenzioni Arduino standard.
 
 ---
 
-## `WSOLED/` — il template
+## `WSOLED/` — il template della board AMOLED
 
 ### `WSOLED.ino`
 
@@ -520,6 +521,77 @@ dall'export "Export UI Files" di SquareLine Studio.
 uniti) — arrivano anche `ui_helpers.*`, `ui_events.*`, gli screen e gli asset.
 `ui_events.c` (quando esiste) **non** viene sovrascritto ai re-export successivi,
 quindi è il posto giusto per la logica degli eventi widget.
+
+---
+
+## `WSOLED_C3/` — il template ESP32-C3 + OLED + OTA
+
+Secondo template del repo, per i **nodi** del sistema camper. **Non condivide
+niente** con la board AMOLED: nessuna libreria di `libraries/`, nessun LVGL,
+nessun `lv_conf.h`/`build_opt.h`. Usa Adafruit SSD1306+GFX e i moduli del core
+(`WiFi`, `ESPmDNS`, `ArduinoOTA`, `WebServer`, `Update`, `Wire`). È self-contained
+per scelta: si può spostare fuori dal repo e continua a compilare.
+
+FQBN diverso dal resto del repo:
+`esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=min_spiffs`, **senza**
+`--libraries libraries`.
+
+### `WSOLED_C3.ino`
+
+**Ruolo**: `setup`/`loop` + disegno OLED. È il file in cui va la logica
+applicativa del nodo.
+
+- Pin in cima come `static constexpr`: `PIN_SDA`=5, `PIN_SCL`=6 (scelti per **non**
+  toccare `PIN_LED`=8, il LED blu onboard attivo LOW, né il tasto BOOT su GPIO9),
+  `OLED_ADDR`=`0x3C`, `OLED_RST`=`-1` (moduli a 4 pin, nessuna linea di reset).
+- `Wire.begin(PIN_SDA, PIN_SCL)` con `periphBegin=false` nella init dell'OLED,
+  per non farsi sovrascrivere i pin appena passati.
+- `drawStatus()`: schermata a riposo (hostname, `FW_VERSION`, stato WiFi, IP,
+  indirizzo `/update`) ridisegnata ~4 fps dal `loop()`, più una pallina che
+  rimbalza nella fascia bassa — serve a vedere a colpo d'occhio che il firmware
+  gira e non è piantato.
+- `onOtaProgress()`: registrata con `net_setOtaProgressCb()` **prima** di
+  `net_begin()`, disegna la barra di avanzamento durante un update. `otaActive`
+  sospende il disegno normale mentre l'update è in corso.
+
+### `net_ota.h` / `net_ota.cpp`
+
+**Ruolo**: tutto il boilerplate di rete e OTA, isolato dal `.ino`. Di norma non
+si tocca.
+
+**API pubblica** (`net_ota.h`, 31 righe):
+- `net_setOtaProgressCb(cb)` — callback opzionale `(int percent, const char *what)`
+  per il feedback a schermo. `percent` è 0..100, oppure **-1 se la dimensione è
+  ignota** (upload web senza `Content-Length`). Va impostata **prima** di
+  `net_begin()`.
+- `net_begin()` — una volta in `setup()`, dopo `Serial` e dopo l'init del display
+  se vuoi vedere l'avanzamento: connette il WiFi (bloccante, timeout 15 s, poi
+  ritenta in background), avvia `ArduinoOTA` (che porta su anche mDNS con
+  `OTA_HOSTNAME`) e il web server con `/` (form) e `/update`
+  (POST multipart → `Update`).
+- `net_loop()` — **a ogni giro** di `loop()`: `ArduinoOTA.handle()` +
+  `server.handleClient()`. Se il `loop()` blocca a lungo, l'OTA smette di
+  rispondere: è il vincolo principale da rispettare aggiungendo logica.
+- `net_isConnected()`, `net_ip()` — stato per la UI.
+
+**Da sapere**: l'autenticazione (password ArduinoOTA + basic-auth su `/update`)
+è dimensionata per una **LAN fidata**, non per esporre la scheda su Internet.
+
+### `secrets.h.example` → `secrets.h`
+
+**Ruolo**: credenziali WiFi (`WIFI_SSID`/`WIFI_PASSWORD`), hostname mDNS
+(`OTA_HOSTNAME`) e password OTA (`OTA_PASSWORD`, `WEB_OTA_USER`/`WEB_OTA_PASS`).
+
+Versionato c'è **solo il `.example`** con i segnaposto: `secrets.h` è escluso dal
+`.gitignore` di radice perché questo repository è **pubblico**. Si copia il
+template e si riempie.
+
+**Da sapere**: la regola nel `.gitignore` è il percorso letterale
+`WSOLED_C3/secrets.h`. Copiando il template in un'altra cartella (`MioNodo/`,
+o fuori dal repo) **quella regola non copre più il nuovo percorso** e va
+riscritta. Se credenziali vere finiscono committate su un repo pubblico, la
+risposta giusta è **cambiare la password della rete**, non riscrivere la storia
+di git: una volta pubblicata va considerata compromessa.
 
 ---
 
@@ -750,8 +822,14 @@ quando la guida è stata scritta, non i file di questo repo (spostati in
 ### `.gitignore`
 
 Esclude artefatti di build Arduino (`build/`, `*.bin`, `*.elf`, `*.map`), file di
-sistema Windows/macOS, `.vscode/`, e `.claude/settings.local.json` (permessi
-locali di Claude Code per questa macchina/sessione, non da condividere).
+sistema Windows/macOS, `.vscode/`, `.claude/settings.local.json` (permessi
+locali di Claude Code per questa macchina/sessione, non da condividere) e
+**`WSOLED_C3/secrets.h`** (credenziali WiFi/OTA reali — vedi la sezione
+`WSOLED_C3/` sopra; il repository è pubblico).
+
+**Da sapere**: la regola su `secrets.h` è un percorso letterale, non un pattern
+`*/secrets.h`. Vale per quella cartella e basta: chi copia il template altrove
+deve riscriverla.
 
 ### `.claude/settings.local.json`
 

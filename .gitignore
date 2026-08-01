@@ -14,3 +14,8 @@ Desktop.ini
 
 # Claude Code (impostazioni locali, non condivise)
 .claude/settings.local.json
+
+# Credenziali reali: MAI committarle (questo repo e' pubblico).
+# Versionato c'e' solo WSOLED_C3/secrets.h.example, con i segnaposto: copialo
+# in secrets.h e riempilo con la tua rete. Questa regola NON e' un commento.
+WSOLED_C3/secrets.h

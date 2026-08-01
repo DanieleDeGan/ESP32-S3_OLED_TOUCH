@@ -4,13 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Cos'è questo repository
 
-Non è un singolo progetto ma uno **starter template riutilizzabile** per sviluppare
-interfacce LVGL (disegnate in SquareLine Studio) sulla Waveshare
-**ESP32-S3-Touch-AMOLED-1.91** (pannello AMOLED 536×240 SH8601, touch capacitivo
-FT3168, IMU onboard QMI8658). Non è un progetto Arduino compilabile di per sé nel
-senso classico: `WSOLED/` va **copiato** in una nuova cartella per ogni progetto reale
-(vedi "Avviare un nuovo progetto" più sotto). `examples/Orientation_IMU/` è una demo
-autosufficiente, indipendente dal template.
+Non è un singolo progetto ma il **workspace del sistema di controllo camper**, con
+due starter template riutilizzabili e gli esempi che li validano:
+
+- **`WSOLED/`** — template per interfacce LVGL (disegnate in SquareLine Studio)
+  sulla Waveshare **ESP32-S3-Touch-AMOLED-1.91** (pannello AMOLED 536×240 SH8601,
+  touch capacitivo FT3168, IMU onboard QMI8658). È la scheda che fa da **hub**.
+- **`WSOLED_C3/`** — template per **ESP32-C3 Supermini** con OLED 0.96" I2C
+  (SSD1306 128×64) e aggiornamento **OTA**. È la scheda dei **nodi** sensore.
+  Self-contained: **non** usa `libraries/`, che è roba della board AMOLED.
+
+Nessuno dei due è un progetto Arduino "finito": si **copiano** in una nuova
+cartella per ogni progetto reale (vedi "Avviare un nuovo progetto" più sotto).
+Gli sketch in `examples/` sono invece demo autosufficienti, da compilare e
+caricare così come sono.
+
+**L'organizzazione è per scheda/ruolo, non per modello di chip**, ed è
+deliberato: `libraries/` è condivisa tra sketch che girano su chip diversi
+(`WSOLED_Link` la usano sia l'hub S3 sia i nodi C3), e metà degli esempi gira su
+qualunque ESP32. Il chip è un attributo documentato per progetto — le tabelle
+qui sotto e in `README.md` hanno la colonna "gira su" — non una cartella.
 
 Per il dettaglio file-per-file (scopo, funzioni chiave, dipendenze, cosa non
 toccare) vedi `FILES.md`. Per il pinout/hardware della board vedi
@@ -20,12 +33,16 @@ toccare) vedi `FILES.md`. Per il pinout/hardware della board vedi
 
 | Percorso | Ruolo |
 |---|---|
-| `libraries/` | librerie Arduino condivise (bus/display/touch/IMU/comunicazione), vedi sotto |
+| `libraries/` | librerie Arduino condivise (bus/display/touch/IMU/comunicazione), vedi sotto — **solo board AMOLED** |
 | `WSOLED/` | il template: sketch vuoto + logica applicativa |
 | `WSOLED/WSOLED.ino` | sketch principale — `setup()`/`loop()`, qui va SOLO la logica applicativa |
 | `WSOLED/lv_conf.h` | configurazione LVGL a livello di progetto |
 | `WSOLED/build_opt.h` | flag di compilazione globali (vedi sotto) |
 | `WSOLED/ui.h/.c` | stub segnaposto, sostituiti dall'export "UI Files" di SquareLine |
+| `WSOLED_C3/` | template ESP32-C3 Supermini + OLED SSD1306 + OTA, self-contained (non usa `libraries/`) |
+| `WSOLED_C3/WSOLED_C3.ino` | `setup()`/`loop()` + disegno OLED — qui va la logica applicativa |
+| `WSOLED_C3/net_ota.h/.cpp` | boilerplate WiFi + ArduinoOTA + web server `/update` — di norma non si tocca |
+| `WSOLED_C3/secrets.h.example` | template delle credenziali: si copia in `secrets.h`, che è **gitignorato** (repo pubblico) |
 | `examples/Orientation_IMU/` | demo autosufficiente: livello a bolla per camper basato sull'IMU onboard, UI costruita in codice (non SquareLine) |
 | `examples/Link_Hub_Demo/` | demo hub del sistema camper: schermo AMOLED + `WSOLED_Link`, pairing/lista nodi associati |
 | `examples/Link_Node_Demo/` | demo nodo sensore finto: solo Serial, nessuna dipendenza dai pin AMOLED, gira su qualunque board ESP32 |
@@ -95,15 +112,39 @@ Equivalente via Arduino IDE (Tools menu):
 - USB CDC On Boot: **Enabled**
 - CPU Frequency: **240 MHz**
 
+### Sketch per ESP32-C3 (FQBN diverso)
+
+`WSOLED_C3/` è per un chip diverso, quindi ha un suo FQBN e **non** vuole
+`--libraries libraries` (non usa le librerie della board AMOLED):
+
+```
+arduino-cli compile --fqbn "esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=min_spiffs" WSOLED_C3
+```
+
+Equivalente Arduino IDE: Board **ESP32C3 Dev Module**, USB CDC On Boot
+**Enabled**, Flash **4MB**, Partition Scheme **Minimal SPIFFS (1.9MB APP with
+OTA)** — consigliato; va bene anche *Default 4MB with spiffs*, ma con questo
+sketch è già all'84%. **Serve una partizione con OTA**: mai *Huge APP (3MB No
+OTA)*, o l'aggiornamento via rete non funziona più.
+
+`examples/Link_Node_Demo/`, `examples/Diag_Node/` e `examples/Diag_Hub/` girano
+su qualunque ESP32: per un C3 usa `esp32:esp32:esp32c3:CDCOnBoot=cdc`. **Senza
+`CDCOnBoot=cdc` la `Serial` dello sketch finisce sui pin UART0** e sulla porta
+USB si vede solo il log di boot della ROM, non lo sketch — errore facile da
+scambiare per "lo sketch non parte".
+
 Per caricare su scheda reale (non solo verificare) serve `--upload -p <porta_seriale>`,
-non testato da qui in quanto richiede la scheda collegata.
+non testato da qui in quanto richiede la scheda collegata. Il C3 si carica via
+USB solo la prima volta: poi si aggiorna via OTA (vedi `WSOLED_C3/net_ota.*`).
 
 Dipendenze esterne (Library Manager):
-- **LVGL 8.3.x** — serve a ogni sketch con schermo.
+- **LVGL 8.3.x** — serve a ogni sketch con schermo sulla board AMOLED.
 - **DHT sensor library** (Adafruit) + **Adafruit Unified Sensor** — solo per
   `examples/DHT11_SD_Logger/`. Sono le stesse già usate dai nodi ESP32-C3 del
-  sistema camper fuori da questo repo, così il DHT11 si legge allo stesso modo
-  su hub e nodi; non è stato scritto un driver locale apposta.
+  sistema camper, così il DHT11 si legge allo stesso modo su hub e nodi; non è
+  stato scritto un driver locale apposta.
+- **Adafruit SSD1306** (tira dentro **Adafruit GFX** e **Adafruit BusIO**) —
+  solo per `WSOLED_C3/`.
 
 Più le librerie locali in `libraries/` (`WSOLED_Core`/`WSOLED_Display`/
 `WSOLED_Touch`/`WSOLED_IMU`/`WSOLED_SD`/`WSOLED_Link`) — vedi la sezione
@@ -222,6 +263,45 @@ Con nodi ESP32-C3 il pairing è immediato e affidabile. **Per nuovi nodi,
 preferire varianti recenti (S2/S3/C3/C6) rispetto all'ESP32 "classico"** per
 un pairing rapido e prevedibile.
 
+## `WSOLED_C3/` — template ESP32-C3 Supermini + OLED + OTA
+
+Il secondo template, per i **nodi** del sistema camper. Non condivide niente con
+la board AMOLED: usa **Adafruit SSD1306 + GFX** e i moduli del core (`WiFi`,
+`ESPmDNS`, `ArduinoOTA`, `WebServer`, `Update`, `Wire`), non `libraries/`. Il
+punto è l'**OTA**: un nodo montato in un gavone non si raggiunge col cavo, quindi
+si carica via USB una volta sola e poi si aggiorna via rete, in due modi —
+ArduinoOTA (compare come porta di rete in Arduino IDE) e una pagina web
+`http://<OTA_HOSTNAME>.local/update` dove si carica il `.bin`.
+
+**Credenziali**: `secrets.h` contiene SSID/password WiFi e le password OTA ed è
+**escluso dal `.gitignore`** — questo repo è pubblico. Versionato c'è solo
+`secrets.h.example` coi segnaposto: si copia in `secrets.h` e si riempie. Se
+qualcosa di reale dovesse finire committato, cambiare la password della rete è
+più affidabile che riscrivere la storia di git: una volta pubblicata va
+considerata compromessa.
+
+**Vincoli hardware (C3 Supermini)**:
+- **I2C OLED**: default SDA=**GPIO5**, SCL=**GPIO6**, indirizzo `0x3C` (alcuni
+  moduli `0x3D`), moduli a 4 pin → reset `-1`. Rimappabili da `PIN_SDA`/`PIN_SCL`
+  in cima al `.ino`.
+- **GPIO8**: LED blu onboard, **attivo LOW** (usato come heartbeat a riposo).
+- **GPIO9**: tasto BOOT (strapping) — non usarlo per periferiche.
+- **GPIO18/19**: USB nativo (Serial/JTAG) — non toccare.
+- I pin I2C di default sono scelti apposta per non toccare né il LED né BOOT.
+
+**`net_ota.*`**: `net_begin()` fa connessione WiFi (bloccante, timeout 15 s, poi
+ritenta in background), `ArduinoOTA.begin()` (che avvia anche mDNS) e il web
+server con `/` e `/update`. `net_loop()` va chiamata **a ogni giro** di `loop()`,
+altrimenti l'OTA muore. Il feedback a schermo durante l'update passa da
+`net_setOtaProgressCb(cb)`, che riceve `percent` 0..100 oppure `-1` se la
+dimensione è ignota (upload web): va impostata **prima** di `net_begin()`.
+L'autenticazione (password ArduinoOTA + basic-auth su `/update`) è pensata per
+una **LAN fidata**, non per esporre la scheda su Internet.
+
+**Dove scrivere la logica**: UI/stato a riposo dentro `drawStatus()` nel `.ino`
+(chiamata ~4 fps dal loop); nuove periferiche in `loop()`, senza bloccare a lungo
+e tenendo vivo `net_loop()`. `net_ota.*` di norma non si tocca.
+
 ## Workflow SquareLine Studio (per `WSOLED/`, template)
 
 1. Nuovo progetto SquareLine: risoluzione **536×240**, colore **16 bit**, LVGL
@@ -238,6 +318,8 @@ un pairing rapido e prevedibile.
 
 ## Avviare un nuovo progetto dal template
 
+Partendo da `WSOLED/` (board AMOLED):
+
 1. Copiare l'intera cartella `WSOLED/` in `MioProgetto/`.
 2. **Portabilità delle librerie**: se `MioProgetto/` resta dentro questo repo
    (accanto a `WSOLED/`/`examples/`), non serve altro — condivide già
@@ -251,6 +333,16 @@ un pairing rapido e prevedibile.
 4. Compilare e caricare così com'è prima di toccare la UI, per confermare che
    display/touch/LVGL funzionino (compare "Starter pronto" centrato).
 5. Poi procedere con l'export SquareLine come sopra.
+
+Partendo da `WSOLED_C3/` (nodo C3):
+
+1. Copiare `WSOLED_C3/` in `MioNodo/` e rinominare il `.ino` in `MioNodo.ino`
+   (stesso vincolo Arduino). Nessuna dipendenza da `libraries/` da portarsi
+   dietro: il template è self-contained, si può spostare ovunque.
+2. Copiare `secrets.h.example` in `secrets.h` e riempirlo. **Se sposti il
+   template fuori da questo repo, porta con te anche la regola di `.gitignore`**:
+   lì la riga `WSOLED_C3/secrets.h` non copre più il nuovo percorso.
+3. Caricare via USB la prima volta, poi si aggiorna via OTA.
 
 ## Hardware: vincoli di pinout (scheda Waveshare ESP32-S3-Touch-AMOLED-1.91)
 

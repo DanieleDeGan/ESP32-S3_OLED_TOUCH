@@ -1,19 +1,30 @@
-# Starter LVGL + SquareLine — Waveshare ESP32-S3-Touch-AMOLED-1.91
+# Sistema camper ESP32 — starter AMOLED (hub) + starter C3 (nodi)
 
-Template riutilizzabile per sviluppare interfacce LVGL (disegnate in SquareLine
-Studio) sulla Waveshare ESP32-S3-Touch-AMOLED-1.91 (AMOLED 536×240, SH8601, touch
-FT3168). Tutto il boilerplate di basso livello è isolato: nel tuo sketch resta
-solo la tua logica.
+Workspace di due schede che lavorano insieme, ognuna con il suo template
+riutilizzabile:
+
+- **`WSOLED/`** — interfacce LVGL (disegnate in SquareLine Studio) sulla
+  Waveshare ESP32-S3-Touch-AMOLED-1.91 (AMOLED 536×240, SH8601, touch FT3168).
+  È la scheda che fa da **hub**. Tutto il boilerplate di basso livello è isolato
+  in librerie: nel tuo sketch resta solo la tua logica.
+- **`WSOLED_C3/`** — ESP32-C3 Supermini con OLED 0.96" I2C (SSD1306) e
+  aggiornamento **OTA** via WiFi. È la scheda dei **nodi** sensore, che una volta
+  montati non si raggiungono più col cavo.
+
+Sono organizzati per scheda, non per modello di chip: le librerie condivise sono
+usate da sketch che girano su chip diversi, e metà degli esempi gira su qualunque
+ESP32. Il chip è indicato progetto per progetto nelle tabelle qui sotto.
 
 ## Contenuto del repository
 
 | Percorso | Ruolo |
 |---|---|
-| `WSOLED/` | **il template**: la cartella da copiare per iniziare un progetto nuovo |
-| `libraries/` | le librerie condivise (display, touch, IMU, microSD, ESP-NOW) |
+| `WSOLED/` | **template board AMOLED**: la cartella da copiare per un progetto hub |
+| `WSOLED_C3/` | **template ESP32-C3** + OLED + OTA, self-contained (non usa `libraries/`) |
+| `libraries/` | le librerie condivise della board AMOLED (display, touch, IMU, microSD, ESP-NOW) |
 | `examples/` | sei sketch completi, da compilare e caricare così come sono |
 | `FILES.md` | reference file-per-file: scopo, funzioni, cosa non toccare |
-| `ESP32-S3-AMOLED-1.91-Guide.md` | pinout e dettagli hardware della scheda |
+| `ESP32-S3-AMOLED-1.91-Guide.md` | pinout e dettagli hardware della board AMOLED |
 
 Dentro `WSOLED/` (e in ogni copia che ne farai):
 
@@ -38,13 +49,18 @@ ogni sketch include solo quello che usa:
 | `WSOLED_Link` | comunicazione ESP-NOW hub↔nodi, indipendente da LVGL/display |
 
 Sono tutte locali a questo repo (vedi setup sotto), non si installano da
-Library Manager. Le uniche dipendenze **esterne**:
+Library Manager, e valgono **solo per la board AMOLED**: `WSOLED_C3/` non ne usa
+nessuna. Le uniche dipendenze **esterne**:
 
-- **LVGL 8.3.x** — serve a ogni sketch con schermo.
+- **LVGL 8.3.x** — serve a ogni sketch con schermo sulla board AMOLED.
 - **DHT sensor library** (Adafruit) + **Adafruit Unified Sensor** — solo per
   `examples/DHT11_SD_Logger/`.
+- **Adafruit SSD1306** (tira dentro GFX e BusIO) — solo per `WSOLED_C3/`.
 
-## Impostazioni Arduino IDE (Tools)
+## Board AMOLED — impostazioni Arduino IDE (Tools)
+
+Da qui fino a "Note hardware" si parla della board AMOLED. Per il C3 vedi la
+sezione dedicata più sotto.
 
 - Board: **ESP32S3 Dev Module**
 - Flash Size: **16MB**
@@ -149,6 +165,78 @@ Contiene due define passati globalmente al compilatore:
 - Sulla versione senza header a pettine (SKU 28596) i GPIO liberi sono piazzole
   da saldare, non un connettore: scegli il pin anche in base a quale riesci a
   raggiungere fisicamente.
+
+## Il nodo: `WSOLED_C3` (ESP32-C3 + OLED + OTA)
+
+Il secondo template, per i moduli sensore. Non ha niente in comune con la board
+AMOLED: usa **Adafruit SSD1306 + GFX** e i moduli del core ESP32, non le
+`libraries/` di questo repo, e si può spostare altrove così com'è.
+
+Il motivo per cui esiste è l'**OTA**: un nodo montato in un gavone non lo
+raggiungi più col cavo. Lo carichi via USB una volta sola, poi lo aggiorni via
+WiFi in due modi — da Arduino IDE (compare come porta di rete) o da browser,
+caricando il `.bin` su `http://<hostname>.local/update`.
+
+### Prima di compilare: le credenziali
+
+`secrets.h` **non è nel repository** ed è escluso dal `.gitignore`, perché
+contiene la password della tua rete WiFi e questo repo è pubblico. Versionato
+c'è solo il template:
+
+```
+cd WSOLED_C3
+copy secrets.h.example secrets.h      # Windows
+cp   secrets.h.example secrets.h      # bash
+```
+
+Poi apri `secrets.h` e riempi SSID, password WiFi, hostname mDNS e le due
+password OTA. **Se un giorno ti accorgi di aver committato credenziali vere,
+cambia la password della rete**: riscrivere la storia di git non basta, una volta
+pubblicata va considerata compromessa.
+
+### Impostazioni Arduino IDE (Tools)
+
+- Board: **ESP32C3 Dev Module**
+- USB CDC On Boot: **Enabled** (senza, la `Serial` finisce sui pin UART0 e sulla
+  porta USB vedi solo il log di boot della ROM)
+- Flash Size: **4MB**
+- Partition Scheme: **Minimal SPIFFS (1.9MB APP with OTA)** — consigliato. Va
+  bene anche *Default 4MB with spiffs*, ma con questo sketch è già all'84%.
+  **Mai** *Huge APP (3MB No OTA)*: senza partizione OTA l'aggiornamento via rete
+  smette di funzionare.
+
+### Cablaggio
+
+| OLED | ESP32-C3 Supermini |
+|------|--------------------|
+| VCC | 3V3 |
+| GND | GND |
+| SDA | **GPIO5** |
+| SCL | **GPIO6** |
+
+I pin sono scelti per non toccare il LED onboard (GPIO8, attivo LOW, fa da
+heartbeat) né il tasto BOOT (GPIO9). Se il tuo modulo è cablato diversamente,
+cambia `PIN_SDA`/`PIN_SCL` in cima al `.ino`. Indirizzo I2C tipico `0x3C`,
+alcuni moduli `0x3D`. Non toccare GPIO18/19: sono l'USB nativo.
+
+### Primo avvio e aggiornamenti
+
+1. Installa **Adafruit SSD1306** da Library Manager (tira dentro GFX e BusIO).
+2. Compila `secrets.h` come sopra e carica **via USB**. A schermo compaiono l'IP
+   e l'indirizzo `…/update`.
+3. **Da Arduino IDE**: in *Tools > Port* compare una porta di rete; selezionala e
+   premi Upload (se hai impostato `OTA_PASSWORD`, te la chiede).
+4. **Da browser**: *Sketch > Export Compiled Binary*, poi apri
+   `http://<hostname>.local/update`, inserisci `WEB_OTA_USER`/`WEB_OTA_PASS` e
+   carica il `.bin`. La barra a schermo mostra l'avanzamento e a fine upload la
+   scheda si riavvia.
+
+`<hostname>.local` funziona via mDNS: su Windows richiede Bonjour installato, in
+alternativa usa direttamente l'IP. L'autenticazione di `/update` e ArduinoOTA è
+pensata per una **LAN fidata**: non esporre la scheda su Internet.
+
+Se al boot il WiFi non è raggiungibile lo sketch continua comunque e ritenta in
+background, ma per un OTA pulito conviene che la rete ci sia già all'avvio.
 
 ## Esempi inclusi
 
