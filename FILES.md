@@ -5,13 +5,28 @@ cosa NON toccare. Per il pinout/hardware della board vedi
 `ESP32-S3-AMOLED-1.91-Guide.md`; per l'architettura d'insieme e i comandi di build
 vedi `CLAUDE.md`. Qui il livello è quello del singolo file.
 
-Il boilerplate hardware (display, touch, IMU, bus I2C) vive in quattro librerie
-Arduino condivise sotto `libraries/` — una per periferica. `WSOLED/` ed
-`examples/Orientation_IMU/` le includono entrambe, senza copie duplicate del
-codice: un bug fix in una libreria vale per tutti gli sketch che la usano.
-Restano invece deliberatamente per-sketch (non condivisi) `lv_conf.h` e
-`build_opt.h`, perché sono configurazione di progetto, non codice — vedi le
-rispettive sezioni sotto `WSOLED/`.
+Il boilerplate hardware (display, touch, IMU, microSD, bus I2C) e di
+comunicazione (ESP-NOW) vive in **sei** librerie Arduino condivise sotto
+`libraries/` — una per periferica/funzione. Ogni sketch include solo quelle
+che usa (`WSOLED/` e `examples/Orientation_IMU/` non toccano SD né ESP-NOW;
+`examples/Link_Node_Demo/` include solo `WSOLED_Link` e non ha nemmeno LVGL),
+senza copie duplicate del codice: un bug fix in una libreria vale per tutti
+gli sketch che la usano. Restano invece deliberatamente per-sketch (non
+condivisi) `lv_conf.h` e `build_opt.h`, perché sono configurazione di
+progetto, non codice — vedi le rispettive sezioni sotto `WSOLED/`.
+
+| Libreria | Usata da |
+|---|---|
+| `WSOLED_Core` | tirata dentro da `WSOLED_Touch`/`WSOLED_IMU`, mai inclusa direttamente da uno sketch |
+| `WSOLED_Display` | `WSOLED/`, `Orientation_IMU`, `DHT11_SD_Logger`, `Link_Hub_Demo` |
+| `WSOLED_Touch` | `WSOLED/`, `Orientation_IMU`, `Link_Hub_Demo` |
+| `WSOLED_IMU` | `Orientation_IMU` |
+| `WSOLED_SD` | `DHT11_SD_Logger` |
+| `WSOLED_Link` | `Link_Hub_Demo`, `Link_Node_Demo` |
+
+Gli sketch `examples/Diag_Hub/` e `examples/Diag_Node/` non usano nessuna
+libreria di questo repo: sono diagnostica ESP-NOW su `esp_now.h` grezzo (vedi
+le loro sezioni).
 
 ---
 
@@ -207,7 +222,178 @@ un modulo passivo (vedi `CLAUDE.md`, sezione architettura).
 
 ---
 
-### `library.properties` (tutte e quattro le librerie)
+### `WSOLED_SD` — `WSOLED_SD.h` / `.cpp`
+
+**Ruolo**: microSD onboard in **SDMMC a 1 bit**, con una API volutamente
+minuscola e orientata a un solo caso d'uso: accodare righe di testo (log CSV).
+Sottile strato sopra `SD_MMC` del core Arduino, non su `esp_vfs_fat_*` grezzo.
+
+**API pubblica**:
+- `SDCard_Init(void)` → `bool` — **è l'unica init del repo che può fallire per
+  cause esterne** (card assente, non FAT32, scheda V1), quindi ritorna un esito
+  invece di essere `void` come le altre. Idempotente e ri-tentabile: se già
+  montata ritorna subito `true`, e se il mount fallisce lascia tutto pulito, così
+  lo sketch può richiamarla più tardi (card infilata a board accesa).
+- `SDCard_IsMounted(void)`, `SDCard_LastError(void)` (stringa breve in italiano,
+  pensata per finire direttamente a schermo), `SDCard_SizeMB(void)`,
+  `SDCard_Exists(const char *path)`.
+- `SDCard_AppendLine(const char *path, const char *line)` — accoda una riga e il
+  newline, creando il file se manca.
+- `SDCard_WriteHeaderIfNew(const char *path, const char *header)` — scrive
+  l'intestazione **solo se il file non esiste**, per non ripeterla ad ogni
+  riavvio; ritorna `true` anche quando non c'era niente da fare.
+
+**Implementazione**:
+- Pin V2 fissi (`SD_PIN_CLK 9`, `SD_PIN_CMD 42`, `SD_PIN_D0 8`), non
+  configurabili di proposito: sono saldati sulla scheda, non una scelta di
+  progetto.
+- `SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT)` —
+  `mode1bit=true`; `format_if_mount_failed=**false**` (formattare la card di
+  qualcuno perché "il mount non riesce" non è un comportamento accettabile);
+  20MHz invece del massimo, perché in 1 bit la frequenza alta è la prima causa
+  di card che montano "a volte".
+- `SDCard_AppendLine()` apre, scrive e **richiude** il file ad ogni riga. Costa
+  qualche millisecondo in più di un handle tenuto aperto, ma se salta
+  l'alimentazione — su un camper succede — si perde al massimo l'ultima riga
+  invece dell'intero file. Verificato sul campo: in una run di 66 h di
+  `DHT11_SD_Logger` la card è stata estratta senza spegnere pulito e il CSV era
+  integro fino all'ultimo byte, 3966 righe su 3966.
+
+**Da sapere**:
+- **Nessun `lvgl_lock()` attorno a queste chiamate**: la SDMMC è un controller a
+  sé e non condivide pin né bus col QSPI del pannello (unico caso, in questo
+  repo, di periferica che convive col rendering senza arbitraggio). Sono però
+  bloccanti per decine di ms: da `loop()`/da un task tuo, **mai** da dentro una
+  callback di evento LVGL.
+- **Solo schede V2.** Sulle V1 la SD sta su SPI3 con CLK=GPIO47, lo stesso pin
+  del PCLK del display: non basta cambiare i `#define`, servirebbe condividere
+  l'host SPI2 riscrivendo anche `WSOLED_Display`. Non c'è modo di distinguere le
+  revisioni a runtime (l'esempio ufficiale Waveshare le seleziona a compile-time
+  con `#ifdef VersionControl_V2`) — se `SDCard_Init()` fallisce con una card
+  sicuramente buona e FAT32, la scheda è probabilmente una V1.
+- Su V2 il GPIO9 porta **anche il TE (tearing effect) del pannello**. Resta
+  inattivo finché non gli si manda il comando `0x35`, che la sequenza di init in
+  `WSOLED_Display.cpp` non manda: non abilitarlo, o va in conflitto col clock
+  della card.
+- Nessuna API di lettura/enumerazione: si può solo scrivere e chiedere se un
+  path esiste. Conseguenza pratica in `WSOLED_SD.cpp:92`:
+  `SDCard_WriteHeaderIfNew()` controlla l'**esistenza** del file, non che
+  l'intestazione combaci — cambiando il formato di un CSV già presente su una
+  card, le righe nuove si accodano in silenzio sotto un header vecchio (vedi la
+  nota in testa a `DHT11_SD_Logger.ino`).
+
+---
+
+### `WSOLED_Link` — `WSOLED_Link.h` (+ `link_peer.h/.cpp`, `link_node.cpp`, `link_hub.cpp`)
+
+**Ruolo**: livello di comunicazione **ESP-NOW** hub↔nodi per il sistema camper.
+Scelto invece di MQTT/WiFi perché alcuni nodi sono a batteria e non serve
+infrastruttura broker/AP. **Indipendente da LVGL e da `WSOLED_Display`**: gira
+anche su una scheda senza schermo, che è il caso tipico di un nodo sensore vero
+(vedi `examples/Link_Node_Demo`). Costruita sopra la libreria ufficiale
+`ESP_NOW`/`ESP_NOW_Peer` bundled nel core Arduino ESP32
+(`.../packages/esp32/hardware/esp32/<versione>/libraries/ESP_NOW/`), non su
+`esp_now.h` grezzo: quella gestisce già peer, canale e scoperta di mittenti
+sconosciuti.
+
+**`WSOLED_Link.h`** — unico header pubblico:
+- `WSOLED_LINK_CHANNEL` (6) — canale WiFi fisso, **deve** essere lo stesso su
+  hub e nodi. Se un giorno l'hub farà anche da AP per un webserver, va
+  coordinato con il canale dell'AP.
+- `link_node_type_t` (UNKNOWN/HUB/SENSOR_TEMPERATURE/SENSOR_WATER_LEVEL/
+  SENSOR_BATTERY/ACTUATOR) e `link_msg_type_t` (HELLO/WELCOME/DATA/COMMAND).
+  Aggiungere tipi **in coda** non rompe la compatibilità: sul wire è un `uint8_t`.
+- `link_message_t` — payload unico da **37 byte**: `protocol_version`,
+  `msg_type`, `node_type` (del mittente), `name[16]`, `seq`, `battery_mv`
+  (0 = alimentazione fissa), `value[3]` (significato dipendente dal tipo).
+  Molto sotto i 250 byte di `ESP_NOW_MAX_DATA_LEN` v1.0 — limite scelto
+  deliberatamente al posto dei 1470 della v2.0 per restare compatibili con
+  qualunque chip ESP32 finisca a fare da nodo.
+- `Link_Init(self_type, self_name)` (una sola volta in `setup()`; decide il
+  ruolo), `Link_OnMessage(cb)`.
+- Ruolo nodo: `Link_Node_Poll()`, `Link_Node_IsPaired()`, `Link_Node_SendData()`.
+- Ruolo hub: `Link_Hub_Poll()`, `Link_Hub_SetPairingMode()`,
+  `Link_Hub_GetPeerCount()`, `Link_Hub_GetPeerInfo()`, `Link_Hub_SendCommand()`.
+- Chiamare le `Link_Node_*` dopo essersi inizializzati come hub (o viceversa)
+  non fa nulla: il ruolo è deciso una volta sola da `Link_Init()`.
+
+**`link_peer.cpp`** — parte comune ai due ruoli:
+- `Link_Init()`: `WIFI_STA` con attesa di `WiFi.STA.started()` **a timeout 5 s**
+  (evita l'hang infinito se il driver non parte) → `ESP_NOW.begin()` → e solo
+  **dopo** `esp_wifi_set_channel()`. L'ordine non è cosmetico: un
+  `WiFi.setChannel()` chiamato prima viene ignorato in silenzio su alcune
+  combinazioni di chip, e il frame esce sul canale sbagliato — l'invio locale
+  sembra riuscito ma `onSent()` è sempre `false`. Poi `esp_wifi_set_protocol()`
+  con lo stesso bitmask 11B|11G|11N su entrambi i lati (i default variano tra
+  generazioni di chip) e `esp_wifi_set_ps(WIFI_PS_NONE)` (il modem-sleep fa
+  perdere unicast mentre il broadcast passa lo stesso).
+- `link_parse_message()`: valida lunghezza esatta e `protocol_version`, e copia
+  **sempre con `memcpy`** in una struct locale — mai un cast diretto del buffer
+  ricevuto, che arriva senza garanzie di allineamento (da cui anche il
+  `__attribute__((packed))` sulla struct, necessario e non solo prudente).
+- `class LinkPeer : public ESP_NOW_Peer` — un peer (il nodo visto dall'hub, o
+  l'hub visto dal nodo). `onReceive()` è generico rispetto al ruolo: valida,
+  aggiorna `lastSeenMs`/`lastData`, e se riceve un HELLO da un peer **già noto**
+  rialza `welcomePending` (un nodo che si riavvia perde il pairing mentre l'hub
+  non lo dimentica mai — senza questo resterebbe in attesa per sempre, perché
+  `onNewPeer` non riscatta per un MAC già registrato).
+- `sendReliable()`: invia, attende la conferma di `onSent()` e ritenta, con
+  backoff crescente + **jitter casuale** (`30 + attempt*40 + random(0,60)` ms) —
+  un ritardo fisso rifarebbe collidere due nodi che hanno fallito nello stesso
+  istante.
+- **La sincronizzazione tra `onSent()` (task del driver WiFi, tipicamente Core 0)
+  e chi attende la conferma (`loop()`, tipicamente Core 1) usa un semaforo
+  FreeRTOS, non un `volatile bool`**: `volatile` impedisce solo il riordino del
+  compilatore, non garantisce la visibilità tra core su un dual-core. Con un bool
+  nudo il ritentativo non vedeva mai la conferma in tempo ed esauriva sempre
+  tutti i tentativi anche a invio riuscito — bug reale trovato su hardware.
+
+**`link_node.cpp`** — ruolo nodo: HELLO in broadcast ogni
+`LINK_HELLO_INTERVAL_MS` (2000) finché non associato, poi DATA in unicast con
+`sendReliable()`. `node_on_new_peer()` accetta il WELCOME dell'hub (scarta
+qualunque altro `msg_type`/`node_type`) e si ferma al primo: non ci si
+"ri-accoppia" con un secondo hub.
+
+**`link_hub.cpp`** — ruolo hub:
+- `hub_on_new_peer()` accetta un HELLO da MAC sconosciuto **solo** se è
+  broadcast **e** `Link_Hub_SetPairingMode(true)` è attivo.
+- Il WELCOME **non parte mai da dentro il callback di ricezione** (gira nel task
+  del driver WiFi e va tenuto breve, stessa regola dei callback LVGL): viene
+  accodato con `welcomePending` e inviato da `Link_Hub_Poll()`, dal `loop()`. Il
+  flag viene pulito **solo a invio riuscito**, così un fallimento transitorio si
+  ritenta al giro dopo invece di bruciare la finestra di pairing di quel nodo.
+- Registro peer in array statico da `ESP_NOW_MAX_TOTAL_PEER_NUM`, **solo in RAM**
+  (nessuna persistenza SD/NVS: scelta deliberata, non ancora implementata — ad
+  ogni riavvio dell'hub i nodi vanno riassociati).
+- Scritto dal callback di ricezione e letto da `loop()`/task LVGL: concorrenza
+  vera, protetta da `portMUX_TYPE` — a differenza di `Core_I2CBusInit()`, che è
+  chiamata solo in sequenza da `setup()` e non ha bisogno di lock.
+
+**Da sapere**:
+- **Scoperta bidirezionale**: `ESP_NOW.onNewPeer()` scatta per MAC *sorgente*
+  sconosciuto, quindi non è una cosa del solo hub — anche il nodo deve gestirlo,
+  perché l'hub gli è sconosciuto finché non arriva il WELCOME. `Link_Init()`
+  registra il gestore giusto in base al ruolo.
+- **Niente RSSI nella callback applicativa**: la libreria ESP_NOW ufficiale lo
+  espone solo in `onNewPeer()`, non nel dispatch `onReceive()` dei peer già
+  aggiunti. Fornirlo sarebbe disponibile per il solo primissimo messaggio di
+  pairing e non per i DATA successivi — incoerenza evitata di proposito.
+- **Limite noto sull'hardware**: l'unicast tra hub ESP32-S3 e nodo ESP32
+  "classico" (Xtensa D0WD) è risultato inaffidabile/lento ad associarsi
+  (broadcast sempre ok, WELCOME/unicast spesso perso), coerente con
+  [espressif/arduino-esp32#10895](https://github.com/espressif/arduino-esp32/issues/10895).
+  Con nodi ESP32-C3 il pairing è immediato. Per nuovi nodi preferire S2/S3/C3/C6.
+- **Residui di diagnostica ancora nel codice** (marcati `DIAGNOSTICA TEMPORANEA`
+  dall'autore, da rimuovere quando la campagna di test è chiusa):
+  `link_peer.h:62` porta il default `ack_timeout_ms` a **1000 ms** invece dei
+  300 ms documentati in `CLAUDE.md`, il che rende falsa anche la nota
+  "bloccante per al massimo ~1s" in `WSOLED_Link.h:136` (il caso peggiore reale
+  è ~3×(1000+50) ≈ 3,1 s, e `Link_Hub_Poll()` lo eredita per ogni WELCOME);
+  `link_peer.cpp:70` stampa una riga sulla seriale **ad ogni tentativo di invio**.
+
+---
+
+### `library.properties` (tutte e sei le librerie)
 
 Nessun campo `depends`: la risoluzione delle dipendenze che conta con
 `--libraries`/le junction locali è quella basata sugli `#include` letterali
@@ -337,14 +523,28 @@ quindi è il posto giusto per la logica degli eventi widget.
 
 ---
 
-## `examples/Orientation_IMU/` — demo autosufficiente
+## `examples/` — sketch di esempio
 
-Include le stesse quattro librerie di `WSOLED/` (`WSOLED_Display`,
-`WSOLED_Touch`, `WSOLED_Core`, più `WSOLED_IMU` per l'accelerometro) — nessuna
-copia locale del codice hardware. Ha solo i propri `build_opt.h`, `lv_conf.h`
-(per-sketch per design, vedi sopra) e il file specifico della demo:
+Sei cartelle sketch indipendenti dal template: non si copiano per iniziare un
+progetto (per quello c'è `WSOLED/`), si compilano e caricano così come sono.
+Nessuna contiene copie locali del codice hardware: quelle che ne hanno bisogno
+includono le librerie di `libraries/` come qualunque altro sketch, le due
+diagnostiche non ne usano nessuna. Quelle con schermo hanno i propri
+`build_opt.h`/`lv_conf.h` (per-sketch per design, vedi sopra); quelle senza LVGL
+non ne hanno bisogno e infatti non li hanno.
 
-### `Orientation_IMU.ino`
+| Sketch | Schermo | Librerie del repo | Gira su |
+|---|---|---|---|
+| `Orientation_IMU` | sì | Display, Touch, IMU (+Core) | solo questa board |
+| `DHT11_SD_Logger` | sì | Display, SD | solo questa board |
+| `Link_Hub_Demo` | sì | Display, Touch, Link (+Core) | solo questa board |
+| `Link_Node_Demo` | no | Link | qualunque ESP32 |
+| `Diag_Hub` | no | nessuna | qualunque ESP32 |
+| `Diag_Node` | no | nessuna | qualunque ESP32 (pensato per C3) |
+
+---
+
+### `Orientation_IMU/Orientation_IMU.ino`
 
 **Ruolo**: sketch completo e funzionante — livella per camper basato sull'IMU
 onboard. UI costruita interamente in codice (non SquareLine), utile come esempio
@@ -374,6 +574,145 @@ di pattern alternativo a `ui.c`/SquareLine.
 
 ---
 
+### `DHT11_SD_Logger/DHT11_SD_Logger.ino`
+
+**Ruolo**: primo sketch del repo che scrive su microSD — temperatura/umidità da
+un DHT11 a schermo (tre "card": temperatura, umidità, numero di campioni) e una
+riga di CSV per lettura valida. **Nessun touch**: è un logger, non si tocca.
+
+- **Cablaggio**: modulo DHT11 a 3 pin su `DHT_DATA_PIN` (GPIO2 di default). I
+  moduli a 3 pin hanno già il pull-up da 10k a bordo; con un sensore nudo a 4
+  pin va aggiunto (4.7k–10k verso 3V3). **Non usare GPIO3** (strapping JTAG,
+  deve restare flottante al reset e il modulo tiene DATA in pull-up) né 26 e
+  33–37 (PSRAM). Sulla versione senza header a pettine (SKU 28596) i GPIO liberi
+  sono piazzole da saldare: scegli il pin in base a quale riesci a raggiungere.
+- **Cadenza**: `SAMPLE_PERIOD_MS` (60000). Il valore compare **solo** lì:
+  l'etichetta a schermo e la riga di `setup()` sulla seriale sono generate da
+  quel define, non scritte a mano.
+- **CSV** `/dht11_log.csv`, colonne
+  `boot_id,n,secondi_da_accensione,temperatura_C,umidita_pct`. La scheda non ha
+  un RTC tamponato, quindi l'unico riferimento temporale onesto è "secondi da
+  accensione" — che però riparte da zero ad ogni avvio, insieme a `n`, in un file
+  che invece sopravvive ai riavvii. Da qui `boot_id`: un contatore in **NVS**
+  (`Preferences`, namespace `dht11log`) incrementato da `boot_id_next()` ad ogni
+  accensione e condiviso da tutte le righe di quella run. È mostrato anche nel
+  titolo a schermo (`(avvio #N)`), così si sa quali righe del file sta scrivendo
+  la scheda che si ha davanti. Ritorna 0 se la NVS non si apre: sentinella
+  riconoscibile, non un conteggio sballato.
+- **Senza microSD funziona lo stesso**: valori a schermo, riga di stato in rosso
+  con `SDCard_LastError()`, e ritenta il mount ogni `SD_RETRY_PERIOD_MS` (30 s)
+  così la card si può infilare a scheda accesa.
+- `take_sample()` non gira sotto `lvgl_lock`: la lettura del DHT11 tiene le
+  interruzioni disabilitate (il protocollo si misura al microsecondo) e la
+  scrittura SD blocca per decine di ms — bloccare anche il rendering per tutto
+  quel tempo non servirebbe a niente. Il lock si prende **solo alla fine**,
+  dentro `ui_refresh()`.
+- `loop()`: la finestra di campionamento riparte da `millis()` **alla fine** di
+  ogni campione, così la barra di avanzamento riflette la cadenza reale invece di
+  accumulare ritardo se una scrittura è andata lunga. Il prezzo è una deriva di
+  ~34 ms a campione (durata di `take_sample()` + granularità del `delay(5)`);
+  se un giorno servisse una cadenza assoluta, si cambia in
+  `win_start_ms += win_span_ms`.
+
+**Dipendenze**: `DHT.h` (Adafruit "DHT sensor library" + "Adafruit Unified
+Sensor", da Library Manager — le stesse dei nodi ESP32-C3 del sistema camper
+fuori da questo repo, così il DHT11 si legge allo stesso modo su hub e nodi),
+`Preferences.h` (bundled nel core), `lvgl.h`, `WSOLED_Display.h`, `WSOLED_SD.h`.
+
+**Da sapere**: validato sul campo con una run di **66 h** (3966 campioni a 60 s,
+zero letture fallite, zero scritture fallite, nessun buco nella sequenza). Il
+formato CSV è cambiato dopo quella run (l'aggiunta di `boot_id`): su una card
+che contiene ancora un log a 4 colonne, `SDCard_WriteHeaderIfNew()` non se ne
+accorge — controlla solo se il file esiste — e le righe nuove si accodano a 5
+campi sotto un'intestazione che ne dichiara 4. Rinomina o cancella il vecchio
+file prima di riusare quella card.
+
+---
+
+### `Link_Hub_Demo/Link_Hub_Demo.ino`
+
+**Ruolo**: hub del sistema camper — valida `WSOLED_Link` dal lato che ha lo
+schermo. Mostra fino a `MAX_ROWS` (6) nodi associati con nome, tipo, ultimo
+valore e "visto N s fa", più un bottone touch che accende/spegne la modalità
+pairing. UI scritta a mano nello stesso stile di `Orientation_IMU`, non
+SquareLine.
+
+- Le 6 righe sono **pre-create nascoste** in `hub_ui_create()` e poi
+  mostrate/nascoste a runtime, invece di creare e distruggere oggetti LVGL ogni
+  volta che cambia il numero di nodi: niente allocazioni nel `loop()`.
+- `pairing_toggle_cb()` è una callback di evento LVGL: **niente lock** (già
+  preso) e corta — chiama solo `Link_Hub_SetPairingMode()` e aggiorna due
+  etichette.
+- `loop()`: `Link_Hub_Poll()` ad ogni giro (è lì che partono i WELCOME accodati),
+  aggiornamento UI ogni 500 ms sotto `lvgl_lock`.
+- Una riga mostra `--` finché `last_data.protocol_version` non combacia, cioè
+  finché da quel nodo non è arrivato un vero DATA: un nodo appena associato
+  compare subito, senza inventare un valore.
+
+**Dipendenze**: `lvgl.h`, `WSOLED_Display.h`, `WSOLED_Touch.h`, `WSOLED_Link.h`.
+
+**Da sapere**: da provare in coppia con `Link_Node_Demo` su una seconda scheda —
+attiva il pairing qui, accendi il nodo, deve comparire una riga entro pochi
+secondi con un valore che si aggiorna ogni ~5 s.
+
+---
+
+### `Link_Node_Demo/Link_Node_Demo.ino`
+
+**Ruolo**: nodo sensore finto, **solo Serial** — 65 righe, nessuna dipendenza da
+display/touch/pin della board AMOLED, gira su qualunque ESP32. È proprio il
+punto: un nodo sensore vero del sistema camper non avrà uno schermo, e questo
+sketch dimostra che `WSOLED_Link` non trascina dentro LVGL. Nessun `lv_conf.h`
+né `build_opt.h` in cartella, per lo stesso motivo.
+
+- Manda una temperatura finta (20.0–30.0 °C derivata da `millis()`) ogni ~5 s
+  una volta associato.
+- L'intervallo ha **jitter casuale** (±250 ms): con più nodi identici sullo
+  stesso hub, un periodo fisso può farli convergere a trasmettere nello stesso
+  istante man mano che i clock derivano, e a quel punto collidono ad ogni ciclo.
+- `on_message()` logga il WELCOME (col MAC dell'hub) e gli eventuali COMMAND.
+
+**Dipendenze**: `WSOLED_Link.h`.
+
+---
+
+### `Diag_Hub/` + `Diag_Node/` — diagnostica ESP-NOW
+
+**Ruolo**: coppia di sketch **usa e getta**, scritti per misurare il tasso di
+perdita reale dei pacchetti quando il pairing di `WSOLED_Link` si è rivelato
+inaffidabile su certe combinazioni di chip. Deliberatamente al livello più basso
+possibile: `esp_now.h` grezzo, **nessuna libreria di questo repo**, nessun
+pairing, nessun peer unicast, nessun retry — solo broadcast di un contatore. Non
+sono demo del sistema camper e non condividono nulla col resto del codice:
+`diag_packet_t` (12 byte, `static_assert` sulla dimensione) è definita a mano e
+identica nei due file, ed è tutto ciò che li lega.
+
+- `Diag_Node` spara un pacchetto ogni `SEND_INTERVAL_MS` (500) in broadcast;
+  `NODE_ID` va cambiato se se ne accendono più di uno. `boot_count` in
+  `RTC_DATA_ATTR` + `esp_reset_reason()` servono a non contare un brownout come
+  "pacchetti persi".
+- `Diag_Hub` conta i **buchi nel numero di sequenza** (= perdita reale),
+  i duplicati, RSSI last/min, e i drop di coda; riepilogo ogni 5 s. Distingue un
+  nodo ripartito (salto all'indietro > 100) da un vero duplicato/riordino MAC.
+- **La recv callback non stampa e non lavora**: copia il pacchetto in una coda
+  FreeRTOS e basta, tutto il parsing e la stampa avvengono in `loop()`. È la
+  stessa disciplina che in `WSOLED_Link` tiene i WELCOME fuori dal callback, qui
+  applicata perché la seriale nel contesto radio fa perdere i pacchetti
+  successivi.
+- **Attenzione**: entrambi impostano `WIFI_PROTOCOL_LR` (Long Range), che è
+  proprietario Espressif e **diverso** dal bitmask 11B|11G|11N di
+  `WSOLED_Link`. I due mondi non si parlano: un Diag_Node non viene visto da un
+  `Link_Hub_Demo` e viceversa. È voluto — servono a misurare il canale, non a
+  interoperare.
+
+**Da sapere**: i commenti di entrambi rimandano ai paragrafi (§1, §2, §4, §6,
+§7, §8, §10) di un documento di analisi ESP-NOW che **non è in questo repo** —
+i riferimenti restano leggibili come struttura del ragionamento (canale fisso
+dopo l'init, callback corta, seq/dup, struct packed, contatori) ma il documento
+va cercato altrove.
+
+---
+
 ## File a livello repository
 
 ### `README.md`
@@ -382,8 +721,9 @@ Introduzione e istruzioni d'uso del template in italiano: tabella file, setup
 Arduino IDE (incluso il collegamento delle librerie condivise), spiegazione
 `build_opt.h`, procedura "avvia un nuovo progetto", dove scrivere la logica
 applicativa, note hardware (SD condivisa, I2C condiviso, GPIO liberi),
-descrizione dell'esempio incluso. È il documento rivolto a un umano che apre
-il repo per la prima volta.
+descrizione di tutti e sei gli esempi. È il documento rivolto a un umano che
+apre il repo per la prima volta, quindi resta a livello "cosa fa / come lo
+provo": il dettaglio per file è qui, non lì.
 
 ### `CLAUDE.md`
 
