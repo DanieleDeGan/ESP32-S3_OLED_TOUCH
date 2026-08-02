@@ -1,0 +1,285 @@
+#include "sd_logger.h"
+#include <SPI.h>
+#include <SD.h>
+#include <Preferences.h>
+#include <ctype.h>
+
+// Pin dedicati per l'HW-125 (vedi tabella nel piano): SCK/MISO/MOSI/CS
+// passati ESPLICITAMENTE a SPI.begin()+SD.begin(), per non dipendere dai
+// pin di default della variante esp32c3 (che potrebbero ricadere su
+// GPIO5/6, in conflitto con l'I2C dell'OLED, o su GPIO2, di strapping).
+#define SD_CS_PIN   1
+#define SD_SCK_PIN  4
+#define SD_MISO_PIN 3
+#define SD_MOSI_PIN 7
+#define SD_SPI_HZ   400000UL    // 400kHz: piu' margine su cablaggi dupont/breadboard
+                                 // per l'inizializzazione. Alzabile (fino a 4-20MHz)
+                                 // una volta confermato che la card monta in modo
+                                 // affidabile, per velocizzare le scritture.
+
+#define LOG_HEADER "ts_iso,ts_unix,fonte_ora,temp_c,hum_pct"
+
+#define NVS_NS          "envnode"
+#define NVS_KEY_BOOTID  "boot_id"
+#define NVS_KEY_RECTOT  "rec_total"
+
+// Il contatore totale si scrive su NVS ogni tot campioni invece che a ogni
+// singolo campione: con l'intervallo minimo di log (5s) sarebbero oltre
+// 6 milioni di scritture/anno sulla stessa chiave, che nel tempo consuma
+// i cicli di erase della flash sottostante la NVS. Un flush ogni 20
+// campioni (+ a ogni rollover di giorno, sempre) porta lo stesso caso
+// estremo a poche centinaia di migliaia di scritture/anno: sicuro per anni
+// di funzionamento continuo. Il contatore e' solo un valore mostrato in
+// UI: un crash tra due flush perde al piu' gli ultimi 19 incrementi dal
+// display, mai dati nel CSV.
+#define REC_TOTAL_FLUSH_EVERY 20
+
+static bool     s_mounted          = false;
+static char     s_lastError[48]    = "non ancora montata";
+static uint32_t s_bootId           = 0;
+static uint32_t s_recordsTotal     = 0;
+static uint32_t s_recordsToday     = 0;
+static uint8_t  s_writesSinceFlush = 0;
+static char     s_currentDay[11]   = "";   // "YYYY-MM-DD" del file attualmente in uso
+
+// ---------------------------------------------------------------------
+//  NVS: apri / leggi-o-scrivi / chiudi, mai tenuta aperta a lungo.
+// ---------------------------------------------------------------------
+static uint32_t nvs_get_u32(const char* key) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NS, /*readOnly=*/true)) return 0;
+  uint32_t v = prefs.getUInt(key, 0);
+  prefs.end();
+  return v;
+}
+
+static void nvs_put_u32(const char* key, uint32_t value) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NS, /*readOnly=*/false)) return;
+  prefs.putUInt(key, value);
+  prefs.end();
+}
+
+static uint32_t nvs_bump_u32(const char* key, uint32_t step) {
+  uint32_t v = nvs_get_u32(key) + step;
+  nvs_put_u32(key, v);
+  return v;
+}
+
+uint32_t sd_boot_id() {
+  if (s_bootId == 0) s_bootId = nvs_bump_u32(NVS_KEY_BOOTID, 1);
+  return s_bootId;
+}
+
+// ---------------------------------------------------------------------
+//  Validazione nomi data (query string web -> path SD)
+// ---------------------------------------------------------------------
+bool sd_name_is_safe(const char* isoDate) {
+  if (!isoDate || strlen(isoDate) != 10) return false;
+  for (int i = 0; i < 10; i++) {
+    char c = isoDate[i];
+    if (i == 4 || i == 7) {
+      if (c != '-') return false;
+    } else if (!isdigit((unsigned char)c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void logPath(const char* isoDate, char* out, size_t outCap) {
+  snprintf(out, outCap, "%s/%s.csv", SD_LOG_DIR, isoDate);
+}
+
+// ---------------------------------------------------------------------
+//  Mount
+// ---------------------------------------------------------------------
+bool sd_begin() {
+  sd_boot_id();   // fissa il boot_id anche se la card non c'e' (come in storage.cpp)
+
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+  SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+
+  if (!SD.begin(SD_CS_PIN, SPI, SD_SPI_HZ)) {
+    s_mounted = false;
+    strlcpy(s_lastError, "card assente o non FAT32", sizeof(s_lastError));
+    return false;
+  }
+  if (SD.cardType() == CARD_NONE) {
+    s_mounted = false;
+    strlcpy(s_lastError, "nessuna card rilevata", sizeof(s_lastError));
+    return false;
+  }
+  if (!SD.exists(SD_LOG_DIR)) SD.mkdir(SD_LOG_DIR);
+
+  s_mounted        = true;
+  s_lastError[0]   = '\0';
+  s_recordsTotal   = nvs_get_u32(NVS_KEY_RECTOT);
+  s_currentDay[0]  = '\0';   // forza lo scan/rollover al primo sd_log_sample()
+  return true;
+}
+
+bool sd_mounted() { return s_mounted; }
+const char* sd_last_error() { return s_lastError; }
+
+uint64_t sd_total_mb() { return s_mounted ? (SD.totalBytes() / (1024ULL * 1024ULL)) : 0; }
+uint64_t sd_free_mb()  { return s_mounted ? ((SD.totalBytes() - SD.usedBytes()) / (1024ULL * 1024ULL)) : 0; }
+
+uint32_t sd_record_count_total() { return s_recordsTotal; }
+uint32_t sd_record_count_today() { return s_recordsToday; }
+
+// ---------------------------------------------------------------------
+//  Cambio di giorno: azzera il contatore di oggi e, se il file esiste gia'
+//  (riavvio a meta' giornata), lo scansiona UNA volta per riprendere il
+//  conteggio giusto — non a ogni richiesta successiva.
+// ---------------------------------------------------------------------
+static void enterDay(const char* isoDate) {
+  strlcpy(s_currentDay, isoDate, sizeof(s_currentDay));
+  s_recordsToday = 0;
+
+  char path[32];
+  logPath(isoDate, path, sizeof(path));
+  if (!SD.exists(path)) return;   // file nuovo: verra' creato con header alla prima scrittura
+
+  File f = SD.open(path, FILE_READ);
+  if (!f) return;
+  bool firstLine = true;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    if (line.length() == 0) continue;
+    if (firstLine) { firstLine = false; continue; }   // intestazione
+    s_recordsToday++;
+  }
+  f.close();
+}
+
+bool sd_log_sample(time_t ts, const char* timeSource, float tempC, float humPct) {
+  if (!s_mounted) return false;
+
+  char isoDate[11];
+  char isoDateTime[20];
+  struct tm local;
+  localtime_r(&ts, &local);
+  strftime(isoDate, sizeof(isoDate), "%Y-%m-%d", &local);
+  strftime(isoDateTime, sizeof(isoDateTime), "%Y-%m-%dT%H:%M:%S", &local);
+
+  if (strcmp(isoDate, s_currentDay) != 0) {
+    enterDay(isoDate);
+    nvs_put_u32(NVS_KEY_RECTOT, s_recordsTotal);   // punto sicuro per un flush extra
+    s_writesSinceFlush = 0;
+  }
+
+  char path[32];
+  logPath(isoDate, path, sizeof(path));
+  bool isNew = !SD.exists(path);
+
+  File f = SD.open(path, FILE_APPEND);
+  if (!f) {
+    strlcpy(s_lastError, "scrittura CSV fallita", sizeof(s_lastError));
+    return false;
+  }
+  if (isNew) f.println(LOG_HEADER);
+  f.printf("%s,%lu,%s,%.1f,%.1f\n", isoDateTime, (unsigned long)ts, timeSource, tempC, humPct);
+  f.close();
+
+  s_recordsToday++;
+  s_recordsTotal++;
+  if (++s_writesSinceFlush >= REC_TOTAL_FLUSH_EVERY) {
+    nvs_put_u32(NVS_KEY_RECTOT, s_recordsTotal);
+    s_writesSinceFlush = 0;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------
+bool sd_delete_day(const char* isoDate) {
+  if (!s_mounted || !sd_name_is_safe(isoDate)) return false;
+
+  char path[32];
+  logPath(isoDate, path, sizeof(path));
+  if (!SD.exists(path)) {
+    strlcpy(s_lastError, "file inesistente", sizeof(s_lastError));
+    return false;
+  }
+  if (!SD.remove(path)) {
+    strlcpy(s_lastError, "cancellazione file fallita", sizeof(s_lastError));
+    return false;
+  }
+
+  if (strcmp(isoDate, s_currentDay) == 0) {
+    s_recordsToday = 0;   // il file verra' ricreato da zero alla prossima scrittura
+  }
+  return true;
+}
+
+File sd_open_day(const char* isoDate) {
+  if (!s_mounted || !sd_name_is_safe(isoDate)) return File();
+  char path[32];
+  logPath(isoDate, path, sizeof(path));
+  return SD.open(path, FILE_READ);
+}
+
+// ---------------------------------------------------------------------
+//  Elenco giorni disponibili
+// ---------------------------------------------------------------------
+int sd_list_days(sd_date_cb_t cb, void* arg, int maxItems) {
+  if (!s_mounted || !cb) return 0;
+
+  File dir = SD.open(SD_LOG_DIR);
+  if (!dir) return 0;
+
+  int count = 0;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    if (!f.isDirectory()) {
+      String name = f.name();
+      int slash = name.lastIndexOf('/');
+      if (slash >= 0) name = name.substring(slash + 1);
+      if (name.endsWith(".csv")) {
+        String iso = name.substring(0, name.length() - 4);
+        cb(iso.c_str(), f.size(), arg);
+        count++;
+        if (maxItems > 0 && count >= maxItems) { f.close(); break; }
+      }
+    }
+    f.close();
+  }
+  dir.close();
+  return count;
+}
+
+// ---------------------------------------------------------------------
+//  Lettura in streaming di un giorno
+// ---------------------------------------------------------------------
+int sd_read_day(const char* isoDate, sd_row_cb_t cb, void* arg) {
+  if (!s_mounted || !cb || !sd_name_is_safe(isoDate)) return 0;
+
+  char path[32];
+  logPath(isoDate, path, sizeof(path));
+  File f = SD.open(path, FILE_READ);
+  if (!f) return 0;
+
+  int  count     = 0;
+  bool firstLine = true;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+    if (firstLine) { firstLine = false; continue; }   // intestazione
+
+    // ts_iso,ts_unix,fonte_ora,temp_c,hum_pct
+    int c1 = line.indexOf(',');
+    int c2 = (c1 >= 0) ? line.indexOf(',', c1 + 1) : -1;
+    int c3 = (c2 >= 0) ? line.indexOf(',', c2 + 1) : -1;
+    int c4 = (c3 >= 0) ? line.indexOf(',', c3 + 1) : -1;
+    if (c1 < 0 || c2 < 0 || c3 < 0 || c4 < 0) continue;
+
+    time_t ts = (time_t)strtoul(line.c_str() + c1 + 1, nullptr, 10);
+    float  t  = atof(line.c_str() + c3 + 1);
+    float  h  = atof(line.c_str() + c4 + 1);
+    cb(ts, t, h, arg);
+    count++;
+  }
+  f.close();
+  return count;
+}

@@ -16,6 +16,8 @@ Desktop.ini
 .claude/settings.local.json
 
 # Credenziali reali: MAI committarle (questo repo e' pubblico).
-# Versionato c'e' solo WSOLED_C3/secrets.h.example, con i segnaposto: copialo
-# in secrets.h e riempilo con la tua rete. Questa regola NON e' un commento.
+# Versionati ci sono solo i *.example, con i segnaposto: copiali in secrets.h e
+# riempili con la tua rete. Le due righe qui sotto NON sono commenti.
 WSOLED_C3/secrets.h
+WSOLED_XIAO/secrets.h
+EnvNode_C3/secrets.h

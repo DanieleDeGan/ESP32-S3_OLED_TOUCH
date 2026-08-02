@@ -1,0 +1,54 @@
+#pragma once
+#include <Arduino.h>
+#include <time.h>
+
+// =====================================================================
+//  web_ui — dashboard del nodo ambientale
+//
+//  Registra le proprie rotte sul WebServer condiviso di net_ota (net_server()):
+//
+//    GET  /                     dashboard (HTML/CSS/JS inline, no CDN)
+//    GET  /api/stato            stato corrente in JSON
+//    GET  /api/giorni           elenco date disponibili nei log (JSON array)
+//    GET  /api/giorno?d=YYYY-MM-DD   campioni di un giorno, in streaming (JSON array)
+//    GET  /api/scarica?d=YYYY-MM-DD scarica il CSV grezzo di un giorno
+//    POST /api/elimina?d=YYYY-MM-DD elimina il file di log di un giorno
+//    GET  /api/config           configurazione corrente in JSON
+//    POST /api/config           imposta parametri (query args)
+//
+//  Tutte dietro la stessa basic-auth di /update (net_webAuthOk()).
+//  /update resta di net_ota.cpp, invariata.
+//
+//  web_ui.cpp legge direttamente settings_get()/sd_logger.*/rtc_time.*/
+//  comfort_eval(): sono gia' moduli disaccoppiati, non servono ganci per
+//  quelli. I ganci qui sotto coprono solo le letture correnti e i min/max
+//  dall'ultimo avvio, che vivono nello stato del .ino.
+// =====================================================================
+
+// Da chiamare in setup(), dopo net_begin().
+void web_ui_begin();
+
+// ---------------------------------------------------------------------
+//  Ganci implementati nello sketch (.ino).
+// ---------------------------------------------------------------------
+bool  app_has_reading();          // false finche' non c'e' stata una lettura DHT11 valida
+
+// "Correnti" = media mobile delle ultime letture valide (smoothing contro il
+// rumore del DHT11): stesso valore mostrato sull'OLED, per coerenza fra le
+// due UI. Il CSV logga invece sempre il dato grezzo (vedi sd_logger.h).
+float app_temp_now();
+float app_hum_now();
+
+// Estremi "dal'ultimo avvio" (stato in RAM, azzerato a ogni boot) sul dato
+// GREZZO (non sulla media mobile): sono i valori realmente misurati.
+float  app_temp_min();
+time_t app_temp_min_ts();
+float  app_temp_max();
+time_t app_temp_max_ts();
+float  app_hum_min();
+time_t app_hum_min_ts();
+float  app_hum_max();
+time_t app_hum_max_ts();
+
+uint32_t    app_dht_errors();
+const char* app_fw_version();
