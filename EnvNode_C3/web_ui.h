@@ -7,7 +7,19 @@
 //
 //  Registra le proprie rotte sul WebServer condiviso di net_ota (net_server()):
 //
-//    GET  /                     dashboard (HTML/CSS/JS inline, no CDN)
+//    GET  /                     dashboard (da /www/dashboard.html su SD se
+//                               presente, altrimenti quella di default
+//                               incorporata nel firmware, HTML/CSS/JS
+//                               inline, no CDN)
+//    GET  /dashboard-upload     form per caricare una dashboard.html
+//                               personalizzata su SD (SEMPRE la versione in
+//                               PROGMEM, indipendente da cosa c'e' sulla SD:
+//                               e' la via di recupero se quella caricata a
+//                               mano e' rotta)
+//    POST /dashboard-upload     riceve il file e lo scrive su
+//                               /www/dashboard.html
+//    POST /dashboard-ripristina elimina /www/dashboard.html: si torna alla
+//                               dashboard di default
 //    GET  /api/stato            stato corrente in JSON
 //    GET  /api/giorni           elenco date disponibili nei log (JSON array)
 //    GET  /api/giorno?d=YYYY-MM-DD   campioni di un giorno, in streaming (JSON array)

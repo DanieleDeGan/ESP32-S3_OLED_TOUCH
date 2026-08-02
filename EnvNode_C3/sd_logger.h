@@ -82,3 +82,26 @@ bool sd_delete_day(const char* isoDate);
 // Ritorna un File "falsy" (operator bool() == false) se la data non e'
 // valida, la SD non e' montata, o il file non esiste.
 File sd_open_day(const char* isoDate);
+
+// ---------------------------------------------------------------------
+//  Dashboard personalizzata su SD (/www/dashboard.html): se presente,
+//  web_ui.cpp la serve al posto di quella incorporata nel firmware. La
+//  pagina di upload/ripristino (web_ui.cpp) resta pero' SEMPRE quella in
+//  PROGMEM, indipendente da questi file: anche una dashboard.html rotta
+//  non puo' mai bloccare fuori chi deve poterla sostituire.
+// ---------------------------------------------------------------------
+#define WWW_DIR            "/www"
+#define WWW_DASHBOARD_PATH "/www/dashboard.html"
+
+bool sd_dashboard_exists();
+
+// File "falsy" se la SD non e' montata o il file non esiste.
+File sd_open_dashboard();
+
+// Crea /www se serve e apre il file in scrittura (tronca un eventuale file
+// preesistente). File "falsy" se la SD non e' montata o l'apertura fallisce.
+File sd_open_dashboard_for_write();
+
+// Ripristina la dashboard di default eliminando il file su SD. true anche
+// se il file non esisteva gia' (nessun errore in quel caso).
+bool sd_delete_dashboard();

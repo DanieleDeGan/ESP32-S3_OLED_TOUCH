@@ -4,6 +4,7 @@
 #include "sd_logger.h"
 #include "rtc_time.h"
 #include "comfort.h"
+#include <Middlewares.h>   // CorsMiddleware, bundled nella libreria WebServer del core
 
 // ---------------------------------------------------------------------
 //  Dashboard (PROGMEM: sta in flash, non in RAM). Niente CDN/librerie
@@ -83,6 +84,7 @@ static const char DASHBOARD_PAGE[] PROGMEM = R"HTML(
  <div class="row"><div><label>Fuso orario (stringa POSIX TZ)</label><input id="cfgTz"></div></div>
  <button id="bsalva">Applica</button>
  <a href="/update" style="margin-left:.6rem">Aggiorna firmware</a>
+ <a href="/dashboard-upload" style="margin-left:.6rem">Dashboard personalizzata</a>
  <p class="muted" id="cfgMsg"></p>
 </div>
 
@@ -311,6 +313,54 @@ refreshConfig().then(loadGiorni);
 </body></html>
 )HTML";
 
+// ---------------------------------------------------------------------
+//  Pagina di upload/ripristino della dashboard (PROGMEM, SEMPRE servita da
+//  qui indipendentemente da cosa c'e' sulla SD): e' la via di recupero se
+//  una dashboard.html caricata a mano risulta rotta. Stessa tecnica di
+//  upload della pagina /update in net_ota.cpp.
+// ---------------------------------------------------------------------
+static const char DASH_UPLOAD_PAGE[] PROGMEM = R"HTML(
+<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EnvNode-C3 &mdash; Dashboard personalizzata</title><style>
+ body{font-family:system-ui,Arial,sans-serif;background:#111;color:#eee;margin:0;padding:2rem;display:flex;justify-content:center}
+ .card{max-width:420px;width:100%;background:#1c1c1c;border:1px solid #333;border-radius:12px;padding:1.5rem}
+ h1{font-size:1.05rem;margin:0 0 1rem}
+ input[type=file]{width:100%;margin:.5rem 0 1rem;color:#ccc}
+ button{width:100%;padding:.7rem;border:0;border-radius:8px;background:#3987e5;color:#fff;font-size:1rem;cursor:pointer;margin-top:.5rem}
+ button.dan{background:#b91c1c}
+ button:disabled{background:#555}
+ progress{width:100%;height:1rem;margin-top:1rem}
+ .muted{color:#8a8a8a;font-size:.8rem;margin-top:1rem;line-height:1.4}
+ a{color:#3987e5}
+</style></head><body><div class="card">
+ <h1>Dashboard personalizzata</h1>
+ <p class="muted">Carica un file .html self-contained (CSS/JS inline, nessuna
+ richiesta esterna) per sostituire la dashboard di default. Viene salvato
+ sulla microSD in <code>/www/dashboard.html</code>. Questa pagina resta
+ SEMPRE raggiungibile qui, anche se la dashboard personalizzata non funziona
+ o la SD viene rimossa (in quel caso torna in uso quella di default).</p>
+ <form id="f"><input type="file" name="dashboard" accept=".html,.htm" required>
+ <button type="submit" id="b">Carica</button>
+ <progress id="p" value="0" max="100" hidden></progress></form>
+ <p class="muted" id="s"></p>
+ <button id="br" class="dan">Ripristina dashboard di default</button>
+ <p class="muted"><a href="/">&larr; torna alla dashboard</a></p>
+<script>
+const f=document.getElementById('f'),b=document.getElementById('b'),p=document.getElementById('p'),s=document.getElementById('s'),br=document.getElementById('br');
+f.addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(f),x=new XMLHttpRequest();
+ x.open('POST','/dashboard-upload');p.hidden=false;b.disabled=true;
+ x.upload.onprogress=ev=>{if(ev.lengthComputable){const pc=Math.round(ev.loaded/ev.total*100);p.value=pc;s.textContent='Caricamento '+pc+'%';}};
+ x.onload=()=>{s.textContent=(x.status==200)?'OK! Vai alla dashboard per vederla.':('Errore: '+x.responseText);b.disabled=false;};
+ x.onerror=()=>{s.textContent='Errore di rete';b.disabled=false;};
+ x.send(fd);});
+br.addEventListener('click',()=>{
+ if(!confirm("Ripristinare la dashboard di default? La versione personalizzata verra' eliminata dalla SD."))return;
+ fetch('/dashboard-ripristina',{method:'POST'}).then(r=>r.text()).then(t=>{s.textContent=t;});
+});
+</script></div></body></html>
+)HTML";
+
 // =======================================================================
 //  Helper: JSON minimale a mano (stesso stile "niente librerie extra" del
 //  resto del repo). Solo escaping di virgolette/backslash/controlli: le
@@ -338,7 +388,67 @@ static void appendJsonString(String& out, const char* s) {
 // ---------------------------------------------------------------------
 static void handleRoot() {
   if (!net_webAuthOk()) { net_server().requestAuthentication(); return; }
+
+  // Dashboard personalizzata su SD, se presente (vedi /dashboard-upload):
+  // altrimenti quella di default incorporata nel firmware.
+  File custom = sd_open_dashboard();
+  if (custom) {
+    net_server().streamFile(custom, "text/html");
+    custom.close();
+    return;
+  }
   net_server().send_P(200, "text/html", DASHBOARD_PAGE);
+}
+
+// ---------------------------------------------------------------------
+//  GET/POST /dashboard-upload, POST /dashboard-ripristina
+// ---------------------------------------------------------------------
+static File s_dashUploadFile;
+static bool s_dashUploadOk = false;
+
+static void handleDashboardUploadPage() {
+  if (!net_webAuthOk()) { net_server().requestAuthentication(); return; }
+  net_server().send_P(200, "text/html", DASH_UPLOAD_PAGE);
+}
+
+// Fine dell'upload: risposta in base a come e' andata la scrittura.
+static void handleDashboardUploadDone() {
+  if (!net_webAuthOk()) { net_server().requestAuthentication(); return; }
+  net_server().sendHeader("Connection", "close");
+  net_server().send(s_dashUploadOk ? 200 : 500, "text/plain",
+                     s_dashUploadOk ? "OK" : "Caricamento fallito (SD non disponibile o scrittura fallita)");
+}
+
+// Ricezione del file a blocchi -> scrittura su /www/dashboard.html.
+static void handleDashboardUploadChunk() {
+  HTTPUpload& up = net_server().upload();
+  switch (up.status) {
+    case UPLOAD_FILE_START:
+      if (!net_webAuthOk()) { s_dashUploadOk = false; return; }
+      s_dashUploadFile = sd_open_dashboard_for_write();
+      s_dashUploadOk   = (bool)s_dashUploadFile;
+      break;
+
+    case UPLOAD_FILE_WRITE:
+      if (s_dashUploadOk) {
+        s_dashUploadOk = (s_dashUploadFile.write(up.buf, up.currentSize) == up.currentSize);
+      }
+      break;
+
+    case UPLOAD_FILE_END:
+      if (s_dashUploadFile) s_dashUploadFile.close();
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void handleDashboardRipristina() {
+  if (!net_webAuthOk()) { net_server().requestAuthentication(); return; }
+  bool ok = sd_delete_dashboard();
+  net_server().send(ok ? 200 : 500, "text/plain",
+                     ok ? "Ripristinata la dashboard di default." : "Cancellazione fallita.");
 }
 
 // ---------------------------------------------------------------------
@@ -578,9 +688,38 @@ static void handleApiConfigPost() {
 }
 
 // ---------------------------------------------------------------------
+// CORS permissivo sulle /api/*: serve per sviluppare una dashboard.html in
+// locale (aperta come file o da un dev server sul PC) e chiamare comunque
+// le API dell'IP della scheda in fetch() cross-origin. Non serve per l'uso
+// normale (la dashboard servita dalla scheda e' same-origin): e' solo
+// comodita' di sviluppo, non una necessita' di sicurezza per un dispositivo
+// su LAN privata. setAllowCredentials(false) perche' l'autenticazione qui
+// passa da un header Authorization impostato a mano nel fetch(), non da
+// cookie/credenziali gestite dal browser — combinare origin "*" con
+// Access-Control-Allow-Credentials:true sarebbe comunque non valido per lo
+// standard fetch. Il middleware gestisce da solo anche il preflight OPTIONS
+// (nessuna autenticazione richiesta li', come da specifica CORS).
+static CorsMiddleware s_cors;
+
 void web_ui_begin() {
   WebServer& srv = net_server();
+
+  // WebServer non tiene traccia degli header della richiesta (nemmeno
+  // "Origin") a meno di dirglielo esplicitamente: senza questa riga
+  // CorsMiddleware::run() vedrebbe sempre hasHeader("Origin")==false, non
+  // aggiungerebbe mai gli header CORS e (peggio) non intercetterebbe il
+  // preflight OPTIONS, che finirebbe sul 404 di default (bug reale
+  // riscontrato in test: la richiesta funzionava ma senza intestazioni
+  // CORS, il preflight falliva con 404).
+  srv.collectAllHeaders();
+
+  s_cors.setOrigin("*").setAllowCredentials(false);
+  srv.addMiddleware(&s_cors);
+
   srv.on("/", HTTP_GET, handleRoot);
+  srv.on("/dashboard-upload", HTTP_GET, handleDashboardUploadPage);
+  srv.on("/dashboard-upload", HTTP_POST, handleDashboardUploadDone, handleDashboardUploadChunk);
+  srv.on("/dashboard-ripristina", HTTP_POST, handleDashboardRipristina);
   srv.on("/api/stato", HTTP_GET, handleApiStato);
   srv.on("/api/giorni", HTTP_GET, handleApiGiorni);
   srv.on("/api/giorno", HTTP_GET, handleApiGiorno);

@@ -221,6 +221,30 @@ File sd_open_day(const char* isoDate) {
 }
 
 // ---------------------------------------------------------------------
+//  Dashboard personalizzata su SD
+// ---------------------------------------------------------------------
+bool sd_dashboard_exists() {
+  return s_mounted && SD.exists(WWW_DASHBOARD_PATH);
+}
+
+File sd_open_dashboard() {
+  if (!s_mounted) return File();
+  return SD.open(WWW_DASHBOARD_PATH, FILE_READ);
+}
+
+File sd_open_dashboard_for_write() {
+  if (!s_mounted) return File();
+  if (!SD.exists(WWW_DIR)) SD.mkdir(WWW_DIR);
+  return SD.open(WWW_DASHBOARD_PATH, FILE_WRITE);
+}
+
+bool sd_delete_dashboard() {
+  if (!s_mounted) return false;
+  if (!SD.exists(WWW_DASHBOARD_PATH)) return true;   // gia' assente: nessun errore
+  return SD.remove(WWW_DASHBOARD_PATH);
+}
+
+// ---------------------------------------------------------------------
 //  Elenco giorni disponibili
 // ---------------------------------------------------------------------
 int sd_list_days(sd_date_cb_t cb, void* arg, int maxItems) {
