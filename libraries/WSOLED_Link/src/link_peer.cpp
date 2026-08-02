@@ -7,6 +7,7 @@
 
 link_node_type_t g_link_self_type = LINK_NODE_UNKNOWN;
 char g_link_self_name[LINK_NAME_LEN] = {0};
+uint8_t g_link_channel = WSOLED_LINK_CHANNEL;
 
 static Link_MessageCb s_message_cb = nullptr;
 
@@ -116,7 +117,13 @@ void LinkPeer::onReceive(const uint8_t *data, size_t len, bool broadcast)
 
 bool Link_Init(link_node_type_t self_type, const char *self_name)
 {
+    return Link_InitEx(self_type, self_name, WSOLED_LINK_CHANNEL);
+}
+
+bool Link_InitEx(link_node_type_t self_type, const char *self_name, uint8_t channel)
+{
     g_link_self_type = self_type;
+    g_link_channel = channel;
     strncpy(g_link_self_name, self_name ? self_name : "", LINK_NAME_LEN - 1);
     g_link_self_name[LINK_NAME_LEN - 1] = '\0';
 
@@ -140,7 +147,13 @@ bool Link_Init(link_node_type_t self_type, const char *self_name)
     // "classico") — l'invio locale sembra riuscire (in coda) ma la consegna
     // over-the-air fallisce sempre (onSent() sempre false) perche' il frame
     // esce sul canale sbagliato.
-    esp_wifi_set_channel(WSOLED_LINK_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    //
+    // Con WSOLED_LINK_CHANNEL_CURRENT (0) il canale NON si tocca: e' il caso
+    // del dispositivo connesso a un AP, dove forzarlo farebbe cadere la
+    // connessione WiFi (il canale lo detta l'AP).
+    if (channel != WSOLED_LINK_CHANNEL_CURRENT) {
+        esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    }
 
     // Stesso bitmask di protocollo su entrambi i lati: chip ESP32 di
     // generazioni diverse possono avere default diversi, causa nota di

@@ -26,6 +26,11 @@ void link_notify_app(const uint8_t mac[6], const link_message_t *msg);
 extern link_node_type_t g_link_self_type;
 extern char g_link_self_name[LINK_NAME_LEN];
 
+/** Canale con cui registrare i peer, impostato da Link_InitEx() (0 =
+ *  "canale corrente", vedi WSOLED_LINK_CHANNEL_CURRENT). Usarlo sempre al
+ *  posto della costante WSOLED_LINK_CHANNEL quando si crea un LinkPeer. */
+extern uint8_t g_link_channel;
+
 /** Setup specifico di ruolo, chiamato una sola volta da Link_Init() in base
  *  a g_link_self_type (implementati in link_node.cpp / link_hub.cpp). */
 void link_node_start(void);

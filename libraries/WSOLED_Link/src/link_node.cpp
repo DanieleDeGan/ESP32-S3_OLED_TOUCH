@@ -34,7 +34,7 @@ static void node_on_new_peer(const esp_now_recv_info_t *info, const uint8_t *dat
         return;
     }
 
-    LinkPeer *hub = new LinkPeer(info->src_addr, WSOLED_LINK_CHANNEL);
+    LinkPeer *hub = new LinkPeer(info->src_addr, g_link_channel);
     if (!hub->addPeer()) {
         delete hub;
         return;
@@ -46,7 +46,7 @@ static void node_on_new_peer(const esp_now_recv_info_t *info, const uint8_t *dat
 
 void link_node_start(void)
 {
-    s_broadcast_peer = new LinkPeer(ESP_NOW.BROADCAST_ADDR, WSOLED_LINK_CHANNEL);
+    s_broadcast_peer = new LinkPeer(ESP_NOW.BROADCAST_ADDR, g_link_channel);
     s_broadcast_peer->addPeer();
     ESP_NOW.onNewPeer(node_on_new_peer, nullptr);
 }

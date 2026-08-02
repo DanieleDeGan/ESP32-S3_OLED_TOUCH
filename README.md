@@ -1,6 +1,6 @@
-# Sistema camper ESP32 — starter AMOLED (hub) + starter C3 (nodi)
+# Sistema camper ESP32 — starter AMOLED (hub) + starter C3 e XIAO (nodi)
 
-Workspace di due schede che lavorano insieme, ognuna con il suo template
+Workspace di tre schede che lavorano insieme, ognuna con il suo template
 riutilizzabile:
 
 - **`WSOLED/`** — interfacce LVGL (disegnate in SquareLine Studio) sulla
@@ -10,6 +10,10 @@ riutilizzabile:
 - **`WSOLED_C3/`** — ESP32-C3 Supermini con OLED 0.96" I2C (SSD1306) e
   aggiornamento **OTA** via WiFi. È la scheda dei **nodi** sensore, che una volta
   montati non si raggiungono più col cavo.
+- **`WSOLED_XIAO/`** — Seeed XIAO ESP32-S3 **Sense** (camera + microSD): il
+  **nodo camera**. Un PIR HC-SR501 fa scattare una foto, la foto va sulla
+  microSD e l'hub riceve la notifica via ESP-NOW; dal browser si guarda il video
+  live, si scatta a mano e si rivedono le foto. OTA come il C3.
 
 Sono organizzati per scheda, non per modello di chip: le librerie condivise sono
 usate da sketch che girano su chip diversi, e metà degli esempi gira su qualunque
@@ -21,6 +25,7 @@ ESP32. Il chip è indicato progetto per progetto nelle tabelle qui sotto.
 |---|---|
 | `WSOLED/` | **template board AMOLED**: la cartella da copiare per un progetto hub |
 | `WSOLED_C3/` | **template ESP32-C3** + OLED + OTA, self-contained (non usa `libraries/`) |
+| `WSOLED_XIAO/` | **template XIAO ESP32-S3 Sense**: camera + PIR + microSD + web UI + OTA (usa `WSOLED_Link`) |
 | `libraries/` | le librerie condivise della board AMOLED (display, touch, IMU, microSD, ESP-NOW) |
 | `examples/` | sei sketch completi, da compilare e caricare così come sono |
 | `FILES.md` | reference file-per-file: scopo, funzioni, cosa non toccare |
@@ -237,6 +242,94 @@ pensata per una **LAN fidata**: non esporre la scheda su Internet.
 
 Se al boot il WiFi non è raggiungibile lo sketch continua comunque e ritenta in
 background, ma per un OTA pulito conviene che la rete ci sia già all'avvio.
+
+## Il nodo camera: `WSOLED_XIAO` (XIAO ESP32-S3 Sense)
+
+Il terzo template. Quando il PIR vede qualcosa muoversi:
+
+```
+PIR HC-SR501 -> foto -> JPEG sulla microSD -> notifica ESP-NOW all'hub
+```
+
+e in qualunque momento, da `http://<hostname>.local/`, puoi guardare il video
+live, scattare a mano, sfogliare/scaricare/cancellare le foto sulla card e
+cambiare le impostazioni (sorveglianza armata o no, pausa tra gli scatti,
+risoluzione, qualità JPEG, rotazione dell'immagine). L'aggiornamento è OTA come
+sul C3.
+
+A differenza del C3 **non è self-contained**: usa `libraries/WSOLED_Link`, cioè
+lo stesso protocollo che parla l'hub. Se sposti la cartella fuori dal repo,
+portati dietro anche quella libreria.
+
+### Cablaggio del PIR
+
+| HC-SR501 | XIAO ESP32-S3 Sense |
+|---|---|
+| VCC | **5V** (il modulo vuole 5V; la sua uscita resta a 3,3V, sicura) |
+| GND | GND |
+| OUT | **D0 (GPIO1)** |
+
+Sul modulo: ponticello su **H** (retriggerabile) e trimmer **TIME** al minimo —
+la pausa tra gli scatti la gestisce il firmware, non il sensore. Dopo
+l'accensione il PIR dà falsi positivi per una decina di secondi: il firmware lo
+ignora per il primo minuto.
+
+Camera e microSD sono già cablate sulla scheda di espansione, non c'è niente da
+collegare. Attenzione a due cose: il chip select della microSD è **GPIO21**
+(lo schematico Seeed dice GPIO3, è un errore noto) ed è anche il LED utente,
+quindi il LED lampeggia da solo quando si scrive sulla card; e lo slot occupa
+tutto il bus SPI, quindi D8/D9/D10 non sono liberi. GPIO liberi per roba tua:
+D1–D5.
+
+### Impostazioni Arduino IDE (Tools)
+
+- Board: **XIAO_ESP32S3** (non "ESP32S3 Dev Module")
+- PSRAM: **OPI PSRAM** — obbligatoria, senza la camera non va oltre QVGA
+- Partition Scheme: **Default 8MB with spiffs (3MB APP/1.5MB SPIFFS)**, che ha
+  le partizioni OTA. **Mai** *Maximum APP (No OTA)*.
+- USB CDC On Boot: **Enabled** — su questa board è già il default, al contrario
+  delle altre schede del repo
+
+Nessuna libreria da installare: il driver della camera è già dentro il core
+ESP32.
+
+### Prima di compilare: le credenziali
+
+Come per il C3, `secrets.h` non è nel repository:
+
+```
+cd WSOLED_XIAO
+copy secrets.h.example secrets.h      # Windows
+cp   secrets.h.example secrets.h      # bash
+```
+
+Dentro ci sono rete WiFi, hostname mDNS, password OTA e le credenziali della
+web UI — qui proteggono **tutta** la pagina, non solo `/update`: mostra le foto
+della camera.
+
+### Il canale ESP-NOW (leggi prima di stupirti)
+
+ESP-NOW ha una radio sola, e questo nodo sta anche sul WiFi (gli servono web UI
+e OTA): il canale glielo impone il router. Quindi **l'hub va inizializzato sullo
+stesso canale del tuo access point**, con
+
+```c
+Link_InitEx(LINK_NODE_HUB, "Hub", canale_del_tuo_AP);   // invece di Link_Init(...)
+```
+
+Il canale su cui il nodo sta effettivamente parlando è scritto nella riga di
+stato della web UI e sulla seriale all'avvio. Senza WiFi il nodo ripiega sul
+canale fisso 6 e l'hub standard va bene com'è.
+
+### Primo avvio
+
+1. Carica **via USB** la prima volta, con le impostazioni qui sopra.
+2. Sulla seriale (115200) compaiono PSRAM, esito camera e microSD, IP e canale.
+3. Apri `http://<hostname>.local/` e prova *Anteprima* e *Scatta e salva*.
+4. Metti l'hub in pairing: il nodo manda HELLO finché non viene accettato, poi
+   la UI mostra "hub associato".
+5. Da lì in avanti si aggiorna via OTA. **Ferma il video prima di aggiornare**:
+   mentre lo stream è aperto la scheda non risponde ad altro.
 
 ## Esempi inclusi
 

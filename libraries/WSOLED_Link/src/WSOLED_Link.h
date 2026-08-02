@@ -41,9 +41,16 @@ extern "C" {
 #endif
 
 /** Canale WiFi fisso usato da ESP-NOW: hub e nodi DEVONO usare lo stesso.
- *  Se in futuro l'hub gira anche come Access Point per un webserver, questo
- *  valore andra' coordinato con il canale dell'AP (non ancora implementato). */
+ *  Vale per i dispositivi che NON sono connessi a un access point (il caso
+ *  normale del camper). Un nodo che invece sta anche su una rete WiFi non puo'
+ *  scegliere il canale — glielo impone l'AP: vedi Link_InitEx() e
+ *  WSOLED_LINK_CHANNEL_CURRENT. */
 #define WSOLED_LINK_CHANNEL 6
+
+/** Canale "quello attuale": non tocca il canale WiFi e registra i peer con
+ *  channel 0 (semantica ESP-NOW: "usa il canale corrente"). Da passare a
+ *  Link_InitEx() quando il dispositivo e' anche connesso a un AP. */
+#define WSOLED_LINK_CHANNEL_CURRENT 0
 
 #define LINK_PROTOCOL_VERSION 1
 #define LINK_NAME_LEN 16
@@ -57,6 +64,7 @@ typedef enum {
     LINK_NODE_SENSOR_WATER_LEVEL = 3,
     LINK_NODE_SENSOR_BATTERY = 4,
     LINK_NODE_ACTUATOR = 5,
+    LINK_NODE_CAMERA = 6,           // nodo camera + PIR (vedi WSOLED_XIAO/)
 } link_node_type_t;
 
 typedef enum {
@@ -111,6 +119,25 @@ typedef void (*Link_MessageCb)(const uint8_t mac[6], const link_message_t *msg);
  * fallisce.
  */
 bool Link_Init(link_node_type_t self_type, const char *self_name);
+
+/**
+ * Come Link_Init(), ma con il canale ESP-NOW esplicito.
+ *
+ *  - channel 1..13  -> forza quel canale con esp_wifi_set_channel() e registra
+ *                      i peer su quel canale. E' quello che fa Link_Init()
+ *                      passando WSOLED_LINK_CHANNEL.
+ *  - channel WSOLED_LINK_CHANNEL_CURRENT (0) -> NON tocca il canale WiFi e
+ *                      registra i peer con channel 0 ("canale corrente").
+ *
+ * Lo 0 serve ai dispositivi che sono anche connessi a un access point: li' il
+ * canale lo decide l'AP e un esp_wifi_set_channel() farebbe cadere la
+ * connessione. ATTENZIONE: ESP-NOW resta una radio sola, quindi in quel caso
+ * TUTTI i partecipanti devono trovarsi sul canale dell'AP — l'hub va
+ * inizializzato con lo stesso numero (es. Link_InitEx(LINK_NODE_HUB, "Hub",
+ * canale_del_tuo_AP)), altrimenti non si sentono. Il caso d'uso e' il nodo
+ * camera di WSOLED_XIAO/, che deve stare sul WiFi per web UI e OTA.
+ */
+bool Link_InitEx(link_node_type_t self_type, const char *self_name, uint8_t channel);
 
 /** Registra la callback opzionale per ogni messaggio valido ricevuto. */
 void Link_OnMessage(Link_MessageCb cb);

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Cos'è questo repository
 
 Non è un singolo progetto ma il **workspace del sistema di controllo camper**, con
-due starter template riutilizzabili e gli esempi che li validano:
+tre starter template riutilizzabili e gli esempi che li validano:
 
 - **`WSOLED/`** — template per interfacce LVGL (disegnate in SquareLine Studio)
   sulla Waveshare **ESP32-S3-Touch-AMOLED-1.91** (pannello AMOLED 536×240 SH8601,
@@ -13,6 +13,10 @@ due starter template riutilizzabili e gli esempi che li validano:
 - **`WSOLED_C3/`** — template per **ESP32-C3 Supermini** con OLED 0.96" I2C
   (SSD1306 128×64) e aggiornamento **OTA**. È la scheda dei **nodi** sensore.
   Self-contained: **non** usa `libraries/`, che è roba della board AMOLED.
+- **`WSOLED_XIAO/`** — template per **Seeed XIAO ESP32-S3 Sense** (camera
+  OV2640 + microSD sulla scheda di espansione): è il **nodo camera** con PIR
+  HC-SR501, web UI, OTA e notifica all'hub via ESP-NOW. Usa
+  `libraries/WSOLED_Link` (il protocollo dell'hub), il resto viene dal core.
 
 Nessuno dei due è un progetto Arduino "finito": si **copiano** in una nuova
 cartella per ogni progetto reale (vedi "Avviare un nuovo progetto" più sotto).
@@ -33,7 +37,7 @@ toccare) vedi `FILES.md`. Per il pinout/hardware della board vedi
 
 | Percorso | Ruolo |
 |---|---|
-| `libraries/` | librerie Arduino condivise (bus/display/touch/IMU/comunicazione), vedi sotto — **solo board AMOLED** |
+| `libraries/` | librerie Arduino condivise (bus/display/touch/IMU/comunicazione), vedi sotto — board AMOLED, tranne `WSOLED_Link` che serve anche ai nodi |
 | `WSOLED/` | il template: sketch vuoto + logica applicativa |
 | `WSOLED/WSOLED.ino` | sketch principale — `setup()`/`loop()`, qui va SOLO la logica applicativa |
 | `WSOLED/lv_conf.h` | configurazione LVGL a livello di progetto |
@@ -43,6 +47,14 @@ toccare) vedi `FILES.md`. Per il pinout/hardware della board vedi
 | `WSOLED_C3/WSOLED_C3.ino` | `setup()`/`loop()` + disegno OLED — qui va la logica applicativa |
 | `WSOLED_C3/net_ota.h/.cpp` | boilerplate WiFi + ArduinoOTA + web server `/update` — di norma non si tocca |
 | `WSOLED_C3/secrets.h.example` | template delle credenziali: si copia in `secrets.h`, che è **gitignorato** (repo pubblico) |
+| `WSOLED_XIAO/` | template nodo camera XIAO ESP32-S3 Sense: PIR → foto su microSD → notifica ESP-NOW, web UI, OTA |
+| `WSOLED_XIAO/WSOLED_XIAO.ino` | `setup()`/`loop()` + logica del PIR e dello scatto — qui va la logica applicativa |
+| `WSOLED_XIAO/camera.h/.cpp` | camera OV2640/OV3660 (pin cablati sulla Sense), cattura e impostazioni |
+| `WSOLED_XIAO/storage.h/.cpp` | microSD **SPI** della Sense: foto `IMG_*.JPG` + CSV degli eventi |
+| `WSOLED_XIAO/net_ota.h/.cpp` | WiFi + ArduinoOTA + `/update`, gemello di quello del C3 — di norma non si tocca |
+| `WSOLED_XIAO/web_ui.h/.cpp` | pagina di controllo + API HTTP (stream MJPEG, scatto, galleria) |
+| `WSOLED_XIAO/hub_link.h/.cpp` | nodo ESP-NOW sopra `WSOLED_Link` (pairing, notifiche, comandi) |
+| `WSOLED_XIAO/secrets.h.example` | come per il C3: si copia in `secrets.h`, **gitignorato** |
 | `examples/Orientation_IMU/` | demo autosufficiente: livello a bolla per camper basato sull'IMU onboard, UI costruita in codice (non SquareLine) |
 | `examples/Link_Hub_Demo/` | demo hub del sistema camper: schermo AMOLED + `WSOLED_Link`, pairing/lista nodi associati |
 | `examples/Link_Node_Demo/` | demo nodo sensore finto: solo Serial, nessuna dipendenza dai pin AMOLED, gira su qualunque board ESP32 |
@@ -67,7 +79,9 @@ usa:
 
 `WSOLED/` ed `examples/Orientation_IMU/` condividono queste librerie (nessuna
 copia duplicata del codice hardware: un bug fix in una libreria vale per tutti
-gli sketch che la includono). Restano invece deliberatamente **per-sketch**
+gli sketch che la includono). L'unica che esce dalla board AMOLED è
+`WSOLED_Link`, inclusa anche dal template `WSOLED_XIAO/` (nodo camera): il
+protocollo hub↔nodi deve essere identico da entrambe le parti. Restano invece deliberatamente **per-sketch**
 (non condivisi) `lv_conf.h` e `build_opt.h`, perché sono configurazione di
 progetto, non codice — vedi le rispettive sezioni sotto.
 
@@ -112,6 +126,26 @@ Equivalente via Arduino IDE (Tools menu):
 - USB CDC On Boot: **Enabled**
 - CPU Frequency: **240 MHz**
 
+### Sketch per XIAO ESP32-S3 Sense (FQBN diverso)
+
+`WSOLED_XIAO/` è un'altra scheda (variante XIAO, 8 MB flash, PSRAM
+obbligatoria per la camera) ma **vuole** `--libraries libraries`, perché usa
+`WSOLED_Link`:
+
+```
+arduino-cli compile --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi,PartitionScheme=default_8MB" --libraries libraries WSOLED_XIAO
+```
+
+Equivalente Arduino IDE: Board **XIAO_ESP32S3**, PSRAM **OPI PSRAM**
+(obbligatoria: senza, la camera non va oltre QVGA), Partition Scheme **Default
+8MB with spiffs (3MB APP/1.5MB SPIFFS)** — ha le partizioni OTA, mai *Maximum
+APP (No OTA)*.
+
+**Attenzione al CDC**: su questa board `CDCOnBoot` è **già Enabled di default**
+e nel FQBN il valore `CDCOnBoot=cdc` significa *Disabled* — cioè l'opposto
+delle altre schede del repo, dove `CDCOnBoot=cdc` va aggiunto per avere la
+`Serial` sull'USB. Qui non va messo nulla.
+
 ### Sketch per ESP32-C3 (FQBN diverso)
 
 `WSOLED_C3/` è per un chip diverso, quindi ha un suo FQBN e **non** vuole
@@ -145,6 +179,10 @@ Dipendenze esterne (Library Manager):
   stato scritto un driver locale apposta.
 - **Adafruit SSD1306** (tira dentro **Adafruit GFX** e **Adafruit BusIO**) —
   solo per `WSOLED_C3/`.
+- **Niente** per `WSOLED_XIAO/`: il driver della camera (`esp_camera.h`) è
+  bundled nel core ESP32 (`tools/esp32s3-libs/<versione>/…/espressif__esp32-camera`),
+  non è una libreria da installare. Tutto il resto (`SD`, `SPI`, `WebServer`,
+  `ArduinoOTA`, `Preferences`) è core.
 
 Più le librerie locali in `libraries/` (`WSOLED_Core`/`WSOLED_Display`/
 `WSOLED_Touch`/`WSOLED_IMU`/`WSOLED_SD`/`WSOLED_Link`) — vedi la sezione
@@ -254,6 +292,18 @@ visibilità tra core su un chip dual-core e faceva sì che il ritentativo non
 vedesse mai la conferma in tempo, esaurendo sempre tutti i tentativi anche a
 invio riuscito (bug reale trovato e corretto durante il test su hardware).
 
+**Canale e convivenza col WiFi**: `Link_Init()` forza il canale fisso
+`WSOLED_LINK_CHANNEL` (6) e presuppone che nessuno sia connesso a un access
+point — il caso normale del camper. Un nodo che sta **anche** su una rete WiFi
+(il nodo camera `WSOLED_XIAO/`, che ha web UI e OTA) non può scegliere il
+canale: glielo impone il router. Per quel caso c'è
+`Link_InitEx(tipo, nome, canale)` con `WSOLED_LINK_CHANNEL_CURRENT` (0), che
+non tocca il canale e registra i peer con channel 0 ("quello corrente").
+Conseguenza da non dimenticare: la radio è una sola, quindi **anche l'hub va
+inizializzato sul canale di quell'AP** (`Link_InitEx(LINK_NODE_HUB, "Hub",
+canale_AP)`), altrimenti i due non si sentono. Se il router cambia canale da
+solo, il nodo lo segue al riavvio e l'hub no.
+
 **Limite noto**: l'unicast ESP-NOW tra un hub ESP32-S3 e un nodo ESP32
 "classico" (Xtensa D0WD) è risultato inaffidabile/lento ad associarsi su
 hardware reale (broadcast sempre ok, WELCOME/unicast spesso perso), coerente
@@ -302,6 +352,65 @@ una **LAN fidata**, non per esporre la scheda su Internet.
 (chiamata ~4 fps dal loop); nuove periferiche in `loop()`, senza bloccare a lungo
 e tenendo vivo `net_loop()`. `net_ota.*` di norma non si tocca.
 
+## `WSOLED_XIAO/` — template nodo camera (XIAO ESP32-S3 Sense)
+
+Il terzo template: il **nodo camera** del camper. La catena è
+
+```
+PIR HC-SR501 -> scatto -> JPEG su microSD -> DATA ESP-NOW all'hub
+```
+
+più una web UI (`http://<OTA_HOSTNAME>.local/`) con video live MJPEG, scatto
+manuale, galleria delle foto sulla card e impostazioni (armato/disarmato, pausa
+tra gli scatti, risoluzione, qualità, flip), e l'OTA come sul C3.
+
+**Perché non è self-contained** (a differenza di `WSOLED_C3/`): include
+`libraries/WSOLED_Link`, perché il protocollo hub↔nodi deve essere lo stesso da
+entrambe le parti. Spostando la cartella fuori dal repo va portata anche
+`libraries/WSOLED_Link` (o una junction). Tutto il resto è core ESP32:
+`esp_camera` è bundled, non serve installare niente.
+
+**Vincoli hardware (XIAO ESP32-S3 Sense)**:
+- **Camera** (cablata sulla scheda di espansione, pin non negoziabili):
+  XCLK=GPIO10, SIOD=GPIO40, SIOC=GPIO39, D0-D7=15/17/18/16/14/12/11/48,
+  VSYNC=GPIO38, HREF=GPIO47, PCLK=GPIO13. Sono gli stessi di
+  `CAMERA_MODEL_XIAO_ESP32S3` in `camera_pins.h` del core. **Serve la PSRAM
+  abilitata**.
+- **microSD della Sense**: su **SPI** (non SDMMC come la board AMOLED, quindi
+  `WSOLED_SD` qui non c'entra): CS=**GPIO21**, SCK=GPIO7 (D8), MISO=GPIO8 (D9),
+  MOSI=GPIO9 (D10). Lo schematico Seeed indica il CS su GPIO3: è un **errore
+  noto**, il pin buono è il 21. GPIO21 è anche il **LED utente** della XIAO →
+  con la Sense montata lampeggia da solo ad ogni accesso alla card e non è
+  usabile come spia di stato. Lo slot occupa tutto il bus SPI (ponticello
+  **J3** sulla Sense per scollegarlo).
+- **PIR HC-SR501**: VCC → pin **5V** (il modulo vuole 5V, l'uscita è 3,3V,
+  sicura per il GPIO), GND → GND, OUT → **D0 (GPIO1)** (`PIN_PIR` nel `.ino`).
+  Ponticello su **H** (retriggerabile), trimmer TIME al minimo. Dopo
+  l'accensione il sensore dà falsi positivi: `PIR_WARMUP_MS` (60 s) li ignora.
+- **GPIO liberi** per altre periferiche: D1–D5 (GPIO 2, 3, 4, 5, 6; 5/6 sono
+  anche SDA/SCL di default). D8/D9/D10 sono occupati dalla microSD.
+- **Microfono PDM** (CLK=GPIO42, DATA=GPIO41): presente sulla Sense ma **non
+  usato** da questo template.
+
+**Vincoli software da rispettare**:
+- Il `WebServer` del core è **sincrono**: finché un client tiene aperto
+  `/stream`, la scheda non risponde ad altro (OTA compreso). Lo stream si
+  autolimita a 5 minuti e il ciclo chiama `app_pump()` ad ogni frame per tenere
+  vivi PIR ed ESP-NOW. Dentro `app_pump()` **non** si chiama `net_loop()`:
+  rientrare in `handleClient()` mentre si serve una richiesta rompe il server.
+- `hub_begin()` va chiamata **dopo** `net_begin()`: il canale ESP-NOW dipende
+  dall'AP a cui ci si è connessi (vedi la sezione `WSOLED_Link` sopra —
+  l'hub va messo sullo stesso canale).
+- La callback di ricezione ESP-NOW **accoda e basta** (coda FreeRTOS), i
+  comandi si eseguono da `loop()`: stessa regola dei callback LVGL sull'hub.
+- Ogni frame ottenuto dalla camera va **sempre** restituito
+  (`camera_release()`), anche sui percorsi d'errore, o dopo pochi scatti non ci
+  sono più buffer liberi.
+
+**Dove scrivere la logica**: nel `.ino` (PIR, scatto, comandi dell'hub, nuove
+periferiche in `loop()` senza bloccare a lungo). `camera.*`, `storage.*`,
+`net_ota.*`, `web_ui.*`, `hub_link.*` sono boilerplate per compito.
+
 ## Workflow SquareLine Studio (per `WSOLED/`, template)
 
 1. Nuovo progetto SquareLine: risoluzione **536×240**, colore **16 bit**, LVGL
@@ -333,6 +442,17 @@ Partendo da `WSOLED/` (board AMOLED):
 4. Compilare e caricare così com'è prima di toccare la UI, per confermare che
    display/touch/LVGL funzionino (compare "Starter pronto" centrato).
 5. Poi procedere con l'export SquareLine come sopra.
+
+Partendo da `WSOLED_XIAO/` (nodo camera):
+
+1. Copiare `WSOLED_XIAO/` in `MiaCamera/` e rinominare il `.ino` in
+   `MiaCamera.ino` (vincolo Arduino). Se la cartella resta dentro il repo non
+   serve altro; se esce, portarsi dietro anche `libraries/WSOLED_Link`.
+2. Copiare `secrets.h.example` in `secrets.h` e riempirlo (e portarsi dietro la
+   regola di `.gitignore`, che è un percorso letterale).
+3. Cambiare `NODE_NAME` nel `.ino`: è il nome con cui il nodo si presenta
+   all'hub, e due nodi con lo stesso nome sono indistinguibili nella lista.
+4. Caricare via USB la prima volta, poi si aggiorna via OTA.
 
 Partendo da `WSOLED_C3/` (nodo C3):
 

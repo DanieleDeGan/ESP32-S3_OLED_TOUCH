@@ -47,7 +47,7 @@ static void hub_on_new_peer(const esp_now_recv_info_t *info, const uint8_t *data
         return;
     }
 
-    LinkPeer *peer = new LinkPeer(info->src_addr, WSOLED_LINK_CHANNEL);
+    LinkPeer *peer = new LinkPeer(info->src_addr, g_link_channel);
     if (!peer->addPeer()) {
         delete peer;
         return;

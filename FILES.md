@@ -22,7 +22,12 @@ progetto, non codice — vedi le rispettive sezioni sotto `WSOLED/`.
 | `WSOLED_Touch` | `WSOLED/`, `Orientation_IMU`, `Link_Hub_Demo` |
 | `WSOLED_IMU` | `Orientation_IMU` |
 | `WSOLED_SD` | `DHT11_SD_Logger` |
-| `WSOLED_Link` | `Link_Hub_Demo`, `Link_Node_Demo` |
+| `WSOLED_Link` | `Link_Hub_Demo`, `Link_Node_Demo`, `WSOLED_XIAO/` |
+
+`WSOLED_Link` è l'unica che esce dalla board AMOLED: la usano anche i nodi
+(template **`WSOLED_XIAO/`**, il nodo camera), perché il protocollo hub↔nodi
+deve essere lo stesso da entrambe le parti e duplicarlo sarebbe il modo più
+sicuro di farlo divergere.
 
 Non usano nessuna di queste librerie: `examples/Diag_Hub/` e
 `examples/Diag_Node/` (diagnostica ESP-NOW su `esp_now.h` grezzo) e il template
@@ -299,10 +304,15 @@ sconosciuti.
 
 **`WSOLED_Link.h`** — unico header pubblico:
 - `WSOLED_LINK_CHANNEL` (6) — canale WiFi fisso, **deve** essere lo stesso su
-  hub e nodi. Se un giorno l'hub farà anche da AP per un webserver, va
-  coordinato con il canale dell'AP.
+  hub e nodi. Vale per i dispositivi **non** connessi a un access point (il caso
+  normale del camper).
+- `WSOLED_LINK_CHANNEL_CURRENT` (0) — "usa il canale attuale, non toccarlo": da
+  passare a `Link_InitEx()` quando il dispositivo è **anche** connesso a un AP,
+  dove il canale lo detta il router e un `esp_wifi_set_channel()` farebbe cadere
+  la connessione. È il caso del nodo camera `WSOLED_XIAO/`.
 - `link_node_type_t` (UNKNOWN/HUB/SENSOR_TEMPERATURE/SENSOR_WATER_LEVEL/
-  SENSOR_BATTERY/ACTUATOR) e `link_msg_type_t` (HELLO/WELCOME/DATA/COMMAND).
+  SENSOR_BATTERY/ACTUATOR/**CAMERA**) e `link_msg_type_t`
+  (HELLO/WELCOME/DATA/COMMAND).
   Aggiungere tipi **in coda** non rompe la compatibilità: sul wire è un `uint8_t`.
 - `link_message_t` — payload unico da **37 byte**: `protocol_version`,
   `msg_type`, `node_type` (del mittente), `name[16]`, `seq`, `battery_mv`
@@ -312,6 +322,14 @@ sconosciuti.
   qualunque chip ESP32 finisca a fare da nodo.
 - `Link_Init(self_type, self_name)` (una sola volta in `setup()`; decide il
   ruolo), `Link_OnMessage(cb)`.
+- `Link_InitEx(self_type, self_name, channel)` — stessa cosa con il canale
+  esplicito; `Link_Init()` è il wrapper che passa `WSOLED_LINK_CHANNEL`. Il
+  canale scelto finisce in `g_link_channel` (interno) ed è quello con cui
+  vengono registrati **tutti** i peer, hub e nodi. Attenzione: ESP-NOW ha una
+  radio sola, quindi passare `WSOLED_LINK_CHANNEL_CURRENT` su un nodo connesso
+  al WiFi obbliga a inizializzare **anche l'hub** sul canale di quell'AP
+  (`Link_InitEx(LINK_NODE_HUB, "Hub", canale_AP)`), altrimenti i due non si
+  sentono.
 - Ruolo nodo: `Link_Node_Poll()`, `Link_Node_IsPaired()`, `Link_Node_SendData()`.
 - Ruolo hub: `Link_Hub_Poll()`, `Link_Hub_SetPairingMode()`,
   `Link_Hub_GetPeerCount()`, `Link_Hub_GetPeerInfo()`, `Link_Hub_SendCommand()`.
@@ -319,9 +337,11 @@ sconosciuti.
   non fa nulla: il ruolo è deciso una volta sola da `Link_Init()`.
 
 **`link_peer.cpp`** — parte comune ai due ruoli:
-- `Link_Init()`: `WIFI_STA` con attesa di `WiFi.STA.started()` **a timeout 5 s**
+- `Link_Init()`/`Link_InitEx()`: `WIFI_STA` con attesa di `WiFi.STA.started()`
+  **a timeout 5 s**
   (evita l'hang infinito se il driver non parte) → `ESP_NOW.begin()` → e solo
-  **dopo** `esp_wifi_set_channel()`. L'ordine non è cosmetico: un
+  **dopo** `esp_wifi_set_channel()` (saltata del tutto se il canale richiesto è
+  `WSOLED_LINK_CHANNEL_CURRENT`). L'ordine non è cosmetico: un
   `WiFi.setChannel()` chiamato prima viene ignorato in silenzio su alcune
   combinazioni di chip, e il frame esce sul canale sbagliato — l'invio locale
   sembra riuscito ma `onSent()` è sempre `false`. Poi `esp_wifi_set_protocol()`
@@ -592,6 +612,157 @@ o fuori dal repo) **quella regola non copre più il nuovo percorso** e va
 riscritta. Se credenziali vere finiscono committate su un repo pubblico, la
 risposta giusta è **cambiare la password della rete**, non riscrivere la storia
 di git: una volta pubblicata va considerata compromessa.
+
+---
+
+## `WSOLED_XIAO/` — il template nodo camera (XIAO ESP32-S3 Sense)
+
+Terzo template del repo: **nodo camera con sensore di movimento** per il sistema
+camper. PIR HC-SR501 → scatto → JPEG su microSD → messaggio DATA all'hub via
+ESP-NOW, più una web UI per guardare/scattare/scaricare e l'OTA come sul C3.
+
+A differenza di `WSOLED_C3/` **non è self-contained**: usa
+`libraries/WSOLED_Link` (il protocollo dell'hub, che non ha senso duplicare).
+Tutto il resto viene dal core ESP32 — `esp_camera` (bundled: non serve nessuna
+libreria dal Library Manager), `SD`+`SPI`, `WiFi`, `ESPmDNS`, `ArduinoOTA`,
+`WebServer`, `Update`, `Preferences`.
+
+FQBN: `esp32:esp32:XIAO_ESP32S3:PSRAM=opi,PartitionScheme=default_8MB`, **con**
+`--libraries libraries`. Nota: su questa board `CDCOnBoot` è **già Enabled di
+default** e il valore `CDCOnBoot=cdc` significa *Disabled* — l'opposto delle
+altre schede del repo, dove va aggiunto esplicitamente.
+
+### `WSOLED_XIAO.ino`
+
+**Ruolo**: la logica applicativa. È il file che si modifica.
+
+- Configurazione in cima: `FW_VERSION` (cambiala ad ogni build, la web UI la
+  mostra), `NODE_NAME` (max 15 caratteri, è il nome con cui il nodo si presenta
+  all'hub), `PIN_PIR` = `D0` (GPIO1), `PIR_WARMUP_MS` (60 s), `COOLDOWN_S_DEFAULT`
+  (30 s).
+- `pir_isr()` — ISR `IRAM_ATTR` su fronte di salita: alza un `volatile bool` e
+  basta. Il timestamp lo prende `loop()`, così nell'ISR non serve nemmeno
+  `millis()`. L'interrupt (invece del polling) serve perché uno scatto+notifica
+  può trattenere `loop()` per qualche secondo e un impulso del PIR andrebbe
+  perso.
+- `do_capture(sorgente, notify_hub, ...)` — l'unico punto in cui si scatta:
+  `camera_grab_fresh()` → `sd_save_photo()` → `camera_release()` (sempre, anche
+  se il salvataggio fallisce: i frame non restituiti finiscono i buffer) →
+  eventuale `hub_notify_motion()` → riga nel CSV. L'indice della foto mandato
+  all'hub si ricava dal nome (`IMG_00042.JPG` → 42).
+- `handle_motion()` — scarta l'evento durante il riscaldamento del PIR o a
+  sorveglianza disarmata, applica la pausa `cooldown` (senza, una persona che si
+  muove riempie la card in pochi minuti), poi scatta **notificando l'hub**.
+- `on_hub_command()` — ARM/DISARM/CAPTURE ricevuti dall'hub, già nel contesto di
+  `loop()` (l'accodamento lo fa `hub_link`).
+- Ganci `app_*()` dichiarati in `web_ui.h` e implementati qui: la web UI non sa
+  niente di PIR/NVS, chiede a queste.
+- `app_pump()` — chiamata dal ciclo dello stream MJPEG. **Non chiama
+  `net_loop()`**: rientrare in `handleClient()` mentre si sta già servendo una
+  richiesta rompe il web server.
+
+### `camera.h` / `camera.cpp`
+
+**Ruolo**: sensore OV2640/OV3660 della Sense. I pin sono copia fedele di
+`CAMERA_MODEL_XIAO_ESP32S3` in `camera_pins.h` del core (XCLK=10, SIOD=40,
+SIOC=39, D0-D7=15/17/18/16/14/12/11/48, VSYNC=38, HREF=47, PCLK=13) e **non
+sono negoziabili**: sono cablati sulla scheda di espansione.
+
+- `camera_begin()` — JPEG, doppio buffer in PSRAM, `CAMERA_GRAB_LATEST`. Senza
+  PSRAM ripiega su QVGA/buffer singolo in DRAM e lo dice su Serial invece di
+  fallire. Applica la correzione standard per l'OV3660 (montato su una parte
+  delle Sense: esce capovolto e slavato).
+- `camera_grab()` (stream, veloce) e `camera_grab_fresh()` (foto: scarta
+  `CAM_STALE_FRAMES`=2 frame, così lo scatto non è l'immagine di un attimo prima
+  e l'esposizione si è assestata). Ogni frame ottenuto va restituito con
+  `camera_release()`.
+- Risoluzione esposta come **indice in una tabella interna** (QVGA→UXGA), non
+  come valore grezzo di `framesize_t`: la web UI non dipende dalla numerazione
+  dell'enum di esp32-camera.
+- `camera_set_quality()` accetta 10..40 — nella convenzione di esp32-camera
+  valori **più bassi = immagine migliore** (sotto 10 si rischiano frame
+  troncati).
+
+### `storage.h` / `storage.cpp`
+
+**Ruolo**: microSD della Sense. **Non** usa `WSOLED_SD`: quella è per la SDMMC
+della board AMOLED, qui la card è su **SPI** (CS=GPIO21, SCK/MISO/MOSI=7/8/9 dai
+default della variante).
+
+- Foto in `/foto/IMG_<progressivo>.JPG`, progressivo in **NVS** (non riparte da
+  zero ad ogni riavvio); se il nome esiste già — card sostituita — avanza invece
+  di sovrascrivere. Un JPEG scritto a metà viene cancellato: meglio nessun file
+  che un file corrotto.
+- CSV `/foto/eventi.csv`, colonne
+  `boot_id,n,secondi_da_accensione,sorgente,file,byte,notifica_hub`. `boot_id`
+  è un contatore NVS, stessa idea di `DHT11_SD_Logger`: senza orologio, "secondi
+  da accensione" da solo non distingue due run nello stesso file.
+- Apre/scrive/chiude ad ogni riga, come `WSOLED_SD`: più lento, ma togliere la
+  card o l'alimentazione non lascia dati in sospeso.
+- `sd_name_is_safe()` — da usare **sempre** sui nomi che arrivano dal web (nega
+  `/`, `\` e `..`), altrimenti l'URL apre l'intera card.
+- `sd_begin()` è ri-chiamabile: senza card lo sketch deve continuare a
+  funzionare (web UI e notifiche restano attive, solo senza salvataggio).
+
+**Da sapere**: GPIO21 è anche il **LED utente** della XIAO — con la Sense montata
+lampeggia da solo ad ogni accesso alla card e non è usabile come spia. E lo slot
+occupa l'intero bus SPI (sulla Sense c'è il ponticello **J3** per scollegarlo).
+Lo schematico Seeed riporta il CS su GPIO3: è un errore noto, il pin buono è 21.
+
+### `net_ota.h` / `net_ota.cpp`
+
+**Ruolo**: gemello di `WSOLED_C3/net_ota.*` (WiFi + ArduinoOTA + `/update`), con
+tre differenze:
+- **non** registra la rotta `/` — la home è la web UI della camera;
+- espone `net_server()`, così `web_ui.cpp` aggiunge le proprie rotte allo stesso
+  `WebServer` (registrarle dopo `server.begin()` è lecito);
+- espone `net_webAuthOk()` (basic-auth condivisa), `net_rssi()` e
+  `net_channel()` — quest'ultimo è il canale che l'ESP-NOW è costretto a seguire.
+
+### `web_ui.h` / `web_ui.cpp`
+
+**Ruolo**: pagina di controllo (PROGMEM, self-contained, nessuna CDN) e API:
+`/`, `/stream`, `/snapshot.jpg`, `/api/scatta`, `/api/stato`, `/api/config`,
+`/api/foto`, `/foto?f=`, `/api/elimina`. Tutte dietro la stessa basic-auth di
+`/update`.
+
+- **Lo stream MJPEG scrive la risposta a mano sul socket** invece di usare
+  `server.send()`: a lunghezza sconosciuta il `WebServer` passerebbe al chunked
+  encoding, che corromperebbe il multipart.
+- Il `WebServer` del core è **sincrono**: finché un client tiene aperto
+  `/stream` la scheda non risponde ad altro, OTA compreso. Per questo lo stream
+  si autolimita a `WEB_STREAM_MAX_MS` (5 minuti) — una scheda del browser
+  dimenticata aperta non deve rendere il nodo inaggiornabile — la pagina lo
+  tiene spento di default e sospende il polling di stato mentre è attivo.
+- Nel ciclo dello stream viene chiamata `app_pump()` ad ogni frame: PIR ed
+  ESP-NOW restano vivi mentre il web server è occupato.
+
+### `hub_link.h` / `hub_link.cpp`
+
+**Ruolo**: il nodo visto dall'hub. Sottile strato sopra `WSOLED_Link`.
+
+- `hub_begin()` va chiamata **dopo** `net_begin()`: guarda se il WiFi è connesso
+  e sceglie il canale di conseguenza (`WSOLED_LINK_CHANNEL_CURRENT` se siamo su
+  un AP, il canale fisso 6 se non c'è rete). **L'hub va inizializzato sullo
+  stesso canale dell'AP** con `Link_InitEx()` — è il punto fragile: se il router
+  cambia canale da solo, il nodo lo segue al riavvio e l'hub no.
+- La callback di ricezione **accoda e basta** (`xQueueSend`), i comandi vengono
+  eseguiti da `hub_loop()` nel contesto di `loop()`: stessa regola dei callback
+  LVGL sull'hub. È una coda FreeRTOS e non un flag `volatile` per lo stesso
+  motivo del semaforo in `LinkPeer` (visibilità tra core).
+- `hub_notify_motion()` manda un DATA con `value[0]`=n. evento,
+  `value[1]`=indice della foto (-1 se non salvata), `value[2]`=1 se è finita su
+  SD. È **bloccante** (conferma + ritentativi): può trattenere `loop()` per
+  qualche secondo se l'hub non risponde — vedi i residui di diagnostica in
+  `WSOLED_Link`.
+
+### `secrets.h.example` → `secrets.h`
+
+**Ruolo**: come per il C3 — `WIFI_SSID`/`WIFI_PASSWORD`, `OTA_HOSTNAME`,
+`OTA_PASSWORD`, più `WEB_USER`/`WEB_PASS` (qui proteggono **tutta** la UI, non
+solo `/update`: la pagina mostra le foto della camera). Versionato c'è solo il
+`.example`; `WSOLED_XIAO/secrets.h` è nel `.gitignore` come riga letterale, con
+le stesse conseguenze descritte per il C3 se sposti il template altrove.
 
 ---
 
