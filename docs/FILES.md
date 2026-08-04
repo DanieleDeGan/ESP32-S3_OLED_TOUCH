@@ -412,13 +412,14 @@ qualunque altro `msg_type`/`node_type`) e si ferma al primo: non ci si
   (broadcast sempre ok, WELCOME/unicast spesso perso), coerente con
   [espressif/arduino-esp32#10895](https://github.com/espressif/arduino-esp32/issues/10895).
   Con nodi ESP32-C3 il pairing è immediato. Per nuovi nodi preferire S2/S3/C3/C6.
-- **Residui di diagnostica ancora nel codice** (marcati `DIAGNOSTICA TEMPORANEA`
-  dall'autore, da rimuovere quando la campagna di test è chiusa):
-  `link_peer.h:62` porta il default `ack_timeout_ms` a **1000 ms** invece dei
-  300 ms documentati in `CLAUDE.md`, il che rende falsa anche la nota
-  "bloccante per al massimo ~1s" in `EspNowLink.h:136` (il caso peggiore reale
-  è ~3×(1000+50) ≈ 3,1 s, e `Link_Hub_Poll()` lo eredita per ogni WELCOME);
-  `link_peer.cpp:70` stampa una riga sulla seriale **ad ogni tentativo di invio**.
+- **Quanto blocca**: `sendReliable()` è sincrona, con default `max_attempts=3` e
+  `ack_timeout_ms=300`. Il caso peggiore (tre tentativi tutti in timeout) è
+  3×300 ms di attesa più i due backoff intermedi (max 90 e 130 ms) ≈ **1,1 s**,
+  ereditato da `Link_Node_SendData()`, `Link_Hub_SendCommand()` e da
+  `Link_Hub_Poll()` per ogni WELCOME accodato. Alzare il timeout si paga tutto
+  sul `loop()` del chiamante: durante la campagna di test ESP-NOW era stato
+  portato a 1000 ms (≈ 3,1 s di blocco) e quello era, da solo, la causa dei
+  "ritardi" che si stavano indagando.
 
 ---
 
@@ -760,8 +761,8 @@ tre differenze:
   motivo del semaforo in `LinkPeer` (visibilità tra core).
 - `hub_notify_motion()` manda un DATA con `value[0]`=n. evento,
   `value[1]`=indice della foto (-1 se non salvata), `value[2]`=1 se è finita su
-  SD. È **bloccante** (conferma + ritentativi): può trattenere `loop()` per
-  qualche secondo se l'hub non risponde — vedi i residui di diagnostica in
+  SD. È **bloccante** (conferma + ritentativi): se l'hub non risponde può
+  trattenere `loop()` fino a ~1,1 s — vedi "quanto blocca" nella sezione
   `EspNowLink`.
 
 ### `secrets.h.example` → `secrets.h`

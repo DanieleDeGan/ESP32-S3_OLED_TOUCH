@@ -64,7 +64,7 @@ public:
      * ~max_attempts*(ack_timeout_ms + 50ms): accettabile per messaggi non a
      * altissima frequenza (HELLO/WELCOME/DATA/COMMAND di questa libreria).
      */
-    bool sendReliable(const link_message_t &msg, int max_attempts = 3, uint32_t ack_timeout_ms = 1000);   // DIAGNOSTICA TEMPORANEA: timeout allargato per misurare la latenza reale
+    bool sendReliable(const link_message_t &msg, int max_attempts = 3, uint32_t ack_timeout_ms = 300);
 
     void onReceive(const uint8_t *data, size_t len, bool broadcast) override;
     void onSent(bool success) override;

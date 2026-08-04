@@ -65,11 +65,8 @@ bool LinkPeer::sendReliable(const link_message_t &msg, int max_attempts, uint32_
         xSemaphoreTake(ackSem, 0);   // scarta un eventuale segnale residuo di un invio precedente
         lastAckSuccess = false;
 
-        uint32_t t0 = millis();   // DIAGNOSTICA TEMPORANEA
         bool queued = sendMessage(msg);
         bool gotSem = queued && (xSemaphoreTake(ackSem, pdMS_TO_TICKS(ack_timeout_ms)) == pdTRUE);
-        Serial.printf("[sendReliable] tentativo %d: queued=%d gotSem=%d success=%d dopo %lums\n",
-                      attempt, queued, gotSem, lastAckSuccess, (unsigned long)(millis() - t0));
         if (gotSem) {
             if (lastAckSuccess) {
                 return true;   // consegna confermata via onSent()
