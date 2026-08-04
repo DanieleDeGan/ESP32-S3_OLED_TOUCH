@@ -55,7 +55,7 @@ static constexpr uint32_t DRAW_PERIOD_MS   = 500;    // ~2Hz: e' testo, non serv
 Adafruit_SSD1306 oled(OLED_W, OLED_H, &Wire, OLED_RST);
 DHT              dht(PIN_DHT, DHT11);
 
-static const char* FW_VERSION = "v1";
+static const char* FW_VERSION = "v2";
 
 static bool     otaActive = false;   // true mentre un update e' in corso
 static uint32_t lastDraw  = 0;

@@ -39,7 +39,7 @@ Adafruit_SSD1306 oled(OLED_W, OLED_H, &Wire, OLED_RST);
 
 // Versione firmware: cambiala a ogni build, cosi' a schermo riconosci quale
 // firmware sta girando dopo un aggiornamento OTA.
-static const char* FW_VERSION = "v2";
+static const char* FW_VERSION = "v3";
 
 static bool     otaActive = false;   // true mentre un update e' in corso
 static uint32_t lastDraw  = 0;

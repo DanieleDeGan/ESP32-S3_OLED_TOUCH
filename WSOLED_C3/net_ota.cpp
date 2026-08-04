@@ -15,6 +15,10 @@ static ota_progress_cb_t s_progressCb        = nullptr;
 static bool              s_webUpdateAuthorized = false;
 static char             s_msg[24];
 
+// Vero mentre un OTA (Arduino o web) sta scrivendo la partizione: il
+// watchdog WiFi sotto non deve toccare la connessione in quella finestra.
+static bool s_updateInProgress = false;
+
 void net_setOtaProgressCb(ota_progress_cb_t cb) { s_progressCb = cb; }
 bool   net_isConnected() { return WiFi.status() == WL_CONNECTED; }
 String net_ip()          { return WiFi.localIP().toString(); }
@@ -81,6 +85,7 @@ static void handleUpdateUpload() {
     case UPLOAD_FILE_START:
       s_webUpdateAuthorized = webAuthOk();
       if (!s_webUpdateAuthorized) return;
+      s_updateInProgress = true;
       Serial.printf("[WebOTA] Start: %s\n", up.filename.c_str());
       if (s_progressCb) s_progressCb(-1, "Web OTA...");
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
@@ -103,6 +108,11 @@ static void handleUpdateUpload() {
       } else {
         Update.printError(Serial);
       }
+      s_updateInProgress = false;
+      break;
+
+    case UPLOAD_FILE_ABORTED:
+      s_updateInProgress = false;
       break;
 
     default:
@@ -133,14 +143,64 @@ static void wifiConnectBlocking(uint32_t timeoutMs) {
   }
 }
 
+// ---------------------------------------------------------------------
+//  Watchdog di riconnessione WiFi
+//
+//  WiFi.setAutoReconnect(true) copre le cadute brevi, ma su hardware reale
+//  lo stack WiFi dell'ESP32 puo' restare "impantanato" dopo un'assenza
+//  prolungata del router (riavvio, salto ISP) e non riprendersi da solo:
+//  e' il sintomo osservato dopo giorni di uptime. Questo watchdog e' una
+//  rete di sicurezza in piu' sui tempi lunghi, non un sostituto.
+// ---------------------------------------------------------------------
+static constexpr uint32_t WIFI_RETRY_MS     = 30UL * 1000;    // giu' da 30s -> ritento
+static constexpr uint32_t WIFI_HARDRESET_MS = 5UL * 60000;    // giu' da 5 min -> re-init completo
+static constexpr uint32_t WIFI_REBOOT_MS    = 15UL * 60000;   // giu' da 15 min -> riavvio scheda
+
+static uint32_t s_lastConnectedMs = 0;
+static uint32_t s_lastRetryMs     = 0;
+
+static void wifiWatchdog() {
+  if (s_updateInProgress) return;   // non toccare il WiFi mentre scrive la partizione
+
+  uint32_t now = millis();
+  if (WiFi.status() == WL_CONNECTED) {
+    s_lastConnectedMs = now;
+    return;
+  }
+
+  uint32_t down = now - s_lastConnectedMs;
+  if (down > WIFI_REBOOT_MS) {
+    Serial.println("[WiFi] Giu' da troppo tempo, riavvio la scheda.");
+    delay(100);
+    ESP.restart();
+  }
+
+  if (now - s_lastRetryMs < WIFI_RETRY_MS) return;   // non ritentare a ogni giro
+  s_lastRetryMs = now;
+
+  if (down > WIFI_HARDRESET_MS) {
+    Serial.println("[WiFi] Giu' da troppo tempo, re-init completo dello stack.");
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(OTA_HOSTNAME);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  } else {
+    Serial.println("[WiFi] Non connesso, ritento...");
+    WiFi.reconnect();
+  }
+}
+
 void net_begin() {
   wifiConnectBlocking(15000);
+  s_lastConnectedMs = millis();   // riferimento iniziale per il watchdog, connesso o no
 
   // --- 1) ArduinoOTA: upload da Arduino IDE (porta di rete) ---
   ArduinoOTA.setHostname(OTA_HOSTNAME);
   if (strlen(OTA_PASSWORD) > 0) ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.onStart([]() {
     Serial.println("[ArduinoOTA] Start");
+    s_updateInProgress = true;
     if (s_progressCb) s_progressCb(0, "ArduinoOTA...");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
@@ -148,10 +208,12 @@ void net_begin() {
   });
   ArduinoOTA.onEnd([]() {
     Serial.println("[ArduinoOTA] Fine");
+    s_updateInProgress = false;
     if (s_progressCb) s_progressCb(100, "Completato");
   });
   ArduinoOTA.onError([](ota_error_t err) {
     Serial.printf("[ArduinoOTA] Errore %u\n", err);
+    s_updateInProgress = false;
   });
   ArduinoOTA.begin();   // avvia anche mDNS con OTA_HOSTNAME
 
@@ -166,6 +228,7 @@ void net_begin() {
 }
 
 void net_loop() {
+  wifiWatchdog();
   ArduinoOTA.handle();
   server.handleClient();
 }
