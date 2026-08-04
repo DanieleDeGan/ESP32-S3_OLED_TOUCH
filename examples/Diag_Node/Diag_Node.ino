@@ -2,7 +2,7 @@
  * Diag_Node.ino — nodo diagnostico ESP-NOW in BROADCAST (per ESP32-C3 Supermini)
  *
  * Il piu' semplice dei sistemi per capire i pacchetti persi/ritardi: nessuna
- * libreria WSOLED_Link, nessun pairing, nessun unicast, nessun retry. Solo
+ * libreria EspNowLink, nessun pairing, nessun unicast, nessun retry. Solo
  * esp_now.h grezzo. Spara un contatore in broadcast a intervallo fisso; l'hub
  * (examples/Diag_Hub) misura quanti ne arrivano contando i buchi nel seq.
  *

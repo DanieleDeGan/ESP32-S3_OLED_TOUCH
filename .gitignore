@@ -17,7 +17,9 @@ Desktop.ini
 
 # Credenziali reali: MAI committarle (questo repo e' pubblico).
 # Versionati ci sono solo i *.example, con i segnaposto: copiali in secrets.h e
-# riempili con la tua rete. Le due righe qui sotto NON sono commenti.
-WSOLED_C3/secrets.h
-WSOLED_XIAO/secrets.h
-EnvNode_C3/secrets.h
+# riempili con la tua rete. La riga qui sotto NON e' un commento.
+#
+# E' un pattern, non un percorso: vale per QUALUNQUE cartella, presente o
+# futura, dentro e fuori dal repo (prima erano tre percorsi letterali, che
+# smettevano di coprire lo sketch appena lo si spostava o copiava).
+secrets.h

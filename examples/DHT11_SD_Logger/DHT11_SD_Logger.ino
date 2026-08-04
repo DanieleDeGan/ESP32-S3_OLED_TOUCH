@@ -9,9 +9,8 @@
  * LIBRERIE RICHIESTE (Library Manager, oltre a LVGL 8.3.x):
  *   - "DHT sensor library" di Adafruit
  *   - "Adafruit Unified Sensor" (dipendenza della precedente)
- * Sono le stesse gia' usate dai nodi ESP32-C3 del sistema camper
- * (NodoTrasmittenteTempEspNow, TrasmettitoreDirect): stesso sensore letto allo
- * stesso modo su hub e nodi.
+ * Sono le stesse usate dai nodi ESP32-C3 di questo repo (vedi
+ * projects/EnvNode_C3): stesso sensore letto allo stesso modo su ogni scheda.
  *
  * CABLAGGIO (modulo DHT11 a 3 pin):
  *     VCC  -> 3V3
@@ -57,8 +56,8 @@
 #include <Preferences.h>    // bundled nel core ESP32: contatore di avvii in NVS
 
 #include "lvgl.h"
-#include <WSOLED_Display.h>
-#include <WSOLED_SD.h>
+#include <AMOLED191_Display.h>
+#include <AMOLED191_SD.h>
 
 // --- Configurazione ---------------------------------------------------------
 #define DHT_DATA_PIN        2

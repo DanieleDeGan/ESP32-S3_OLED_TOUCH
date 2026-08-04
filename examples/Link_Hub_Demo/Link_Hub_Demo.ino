@@ -1,5 +1,5 @@
 /**
- * Link_Hub_Demo.ino — hub del sistema camper, validazione WSOLED_Link
+ * Link_Hub_Demo.ino — lato hub di EspNowLink, con UI sulla board AMOLED
  *
  * Mostra i nodi associati (nome, tipo, ultimo valore, "visto N s fa") e un
  * bottone per attivare la modalita' pairing. UI scritta a mano (oggetti LVGL
@@ -12,9 +12,9 @@
  */
 
 #include "lvgl.h"
-#include <WSOLED_Display.h>
-#include <WSOLED_Touch.h>
-#include <WSOLED_Link.h>
+#include <AMOLED191_Display.h>
+#include <AMOLED191_Touch.h>
+#include <EspNowLink.h>
 
 #define MAX_ROWS 6
 
@@ -76,7 +76,7 @@ static void hub_ui_create(void)
     lv_obj_t *title = lv_label_create(scr);
     lv_obj_set_style_text_color(title, lv_color_hex(0x8aa0b0), 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 8, 6);
-    lv_label_set_text(title, "HUB CAMPER");
+    lv_label_set_text(title, "HUB ESP-NOW");
 
     s_pairing_label = lv_label_create(scr);
     lv_obj_set_style_text_color(s_pairing_label, lv_color_hex(0xE24B4A), 0);

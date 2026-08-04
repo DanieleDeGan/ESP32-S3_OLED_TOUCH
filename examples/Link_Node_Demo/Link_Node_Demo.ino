@@ -1,16 +1,16 @@
 /**
- * Link_Node_Demo.ino — nodo sensore finto per validare WSOLED_Link
+ * Link_Node_Demo.ino — nodo sensore finto per validare EspNowLink
  *
  * Sketch minimo, solo Serial: nessuna dipendenza da display/touch/pin della
  * board AMOLED, pensato per girare su QUALUNQUE scheda ESP32 (e' proprio
- * questo il punto — un vero nodo sensore del sistema camper non avra' uno
- * schermo). Manda un valore di temperatura finto ogni 5s una volta associato
+ * questo il punto — un vero nodo sensore, in genere, uno schermo non ce
+ * l'ha). Manda un valore di temperatura finto ogni 5s una volta associato
  * a un hub in modalita' pairing (vedi examples/Link_Hub_Demo).
  *
  * Nessun lv_conf.h/build_opt.h qui: non serve LVGL.
  */
 
-#include <WSOLED_Link.h>
+#include <EspNowLink.h>
 
 static void on_message(const uint8_t mac[6], const link_message_t *msg)
 {

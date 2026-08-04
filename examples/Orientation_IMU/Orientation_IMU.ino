@@ -16,9 +16,9 @@
 
 #include <math.h>
 #include "lvgl.h"
-#include <WSOLED_Display.h>
-#include <WSOLED_Touch.h>
-#include <WSOLED_IMU.h>
+#include <AMOLED191_Display.h>
+#include <AMOLED191_Touch.h>
+#include <AMOLED191_IMU.h>
 
 // --- Dimensioni del camper (mm): Adria Matrix Axess 680 SP (Fiat Ducato Maxi) ---
 #define TRACK_MM       1800.0f    // carreggiata Ducato (distanza ruote sx-dx)

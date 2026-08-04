@@ -5,7 +5,7 @@
  * Display / LVGL / touch / SD SPENTI di proposito: e' il Test 1 del §10 del
  * documento di analisi. Riceve i broadcast di Diag_Node e misura il tasso di
  * perdita REALE contando i buchi nel numero di sequenza. Nessuna libreria
- * WSOLED_Link, nessun pairing, nessun peer: per ricevere un broadcast in
+ * EspNowLink, nessun pairing, nessun peer: per ricevere un broadcast in
  * esp_now.h grezzo basta registrare la recv callback.
  *
  * ARCHITETTURA (§2, il punto piu' importante su questa board): la recv callback
